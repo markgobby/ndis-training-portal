@@ -123,13 +123,14 @@ async function dashboard() {
     const tab = (k, label, i) => `<button type="button" role="tab" data-tab="${k}" data-e="${e.id}" aria-selected="${k === openKey}"
       class="${i < idx || e.status === 'completed' ? 'done' : i === idx ? 'current' : ''} ${k === openKey ? 'on' : ''}">${label}</button>`;
 
-    const wbPanel = mine.length ? `<div class="table-wrap"><table><thead><tr><th>Workbook</th><th>Status</th><th></th></tr></thead><tbody>
-        ${mine.map((a) => `<tr><td>${esc(a.workbooks.title)}<div class="small muted">${esc(a.workbooks.description || '')}</div>
-          ${a.status === 'resubmit' && a.reviewer_notes ? `<div class="notice small">Trainer: ${esc(a.reviewer_notes)}</div>` : ''}</td>
-          <td>${badge(a.status)}</td>
-          <td class="right"><a class="btn small ${['submitted', 'competent'].includes(a.status) ? 'secondary' : ''}" href="#/wb/${a.id}">
-            ${{ not_started: 'Start', in_progress: 'Continue', resubmit: 'Fix & resubmit' }[a.status] || 'View'}</a></td></tr>`).join('')}
-      </tbody></table></div>` : '<p class="muted">No workbooks assigned yet.</p>';
+    const wbPanel = mine.length ? `<ul class="wblist">${mine.map((a) => `<li>
+        <div class="wbtitle">${esc(a.workbooks.title)}</div>
+        ${a.workbooks.description ? `<div class="small muted">${esc(a.workbooks.description)}</div>` : ''}
+        ${a.status === 'resubmit' && a.reviewer_notes ? `<div class="notice small">Trainer: ${esc(a.reviewer_notes)}</div>` : ''}
+        <div class="row between" style="margin-top:.4rem">${badge(a.status)}
+          <a class="btn small ${['submitted', 'competent'].includes(a.status) ? 'secondary' : ''}" href="#/wb/${a.id}">
+            ${{ not_started: 'Start', in_progress: 'Continue', resubmit: 'Fix & resubmit' }[a.status] || 'View'}</a></div></li>`).join('')}</ul>`
+      : '<p class="muted">No workbooks assigned yet.</p>';
 
     let group = null;
     const pracPanel = `<p class="small">${last ? `Assessed on <b>${fmtDate(last.assessed_on)}</b>${last.location ? ` at ${esc(last.location)}` : ''} by ${esc(last.assessor_name || 'your trainer')}: ${badge(last.outcome)}`

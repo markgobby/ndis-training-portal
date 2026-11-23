@@ -168,3 +168,19 @@ html, body { overflow-x: hidden; }
 .steptabs button.current { background: var(--brand); color: #fff; }
 .steptabs button.on { border-color: var(--ink); box-shadow: 0 2px 0 var(--ink); }
 .steptabs button:not(.done):not(.current).on { background: #fff; color: var(--ink); }
+/* --- small-screen sizing --- */
+.steptabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .3rem; }
+.steptabs button { min-width: 0; font-size: clamp(.68rem, 2.9vw, .82rem); padding: .45rem .15rem; line-height: 1.2; }
+@media (max-width: 360px) { .steptabs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.wblist { list-style: none; padding: 0; margin: 0; }
+.wblist li { padding: .75rem 0; border-bottom: 1px solid var(--line); }
+.wbtitle { font-weight: 600; }
+#topbar .inner > * { min-width: 0; }
+#topbar .title { overflow-wrap: anywhere; }
+.row > * { min-width: 0; }
+.sample-mark { font-size: min(5rem, 15vw) !important; }
+.doc table { display: block; overflow-x: auto; max-width: 100%; }
+@media (max-width: 640px) { .doc table { font-size: .8rem; } .doc th, .doc td { padding: .35rem .3rem; } }
+.steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.steps div { min-width: 0; font-size: clamp(.68rem, 2.9vw, .8rem); }
+@media (max-width: 360px) { .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
