@@ -34,7 +34,7 @@ NDIS High Intensity Supports training portal. One trainer/assessor (the admin) r
 - `js/admin.js`: admin screens; the organisation switcher filters through `state.org`. Workbook library and preview (`#/a/preview/:id`), workbook editor (Part 1, Part 2, practical skills, Available to), package builder with checklist preview, invite codes with workbook selection
 - `js/learner.js`: learner dashboard (each training card has Workbooks / Practical / Review / Certificate tabs; Practical shows the observation checklist and results, Review shows results, feedback status and the report, Certificate links to the real or SAMPLE certificate), workbook Part 1 (`#/wb/:id/learn`) and Part 2 (`#/wb/:id/assess`), feedback form
 - `js/documents.js`: printable post-training report and certificate (`#/doc/report/:id`, `#/doc/cert/:id`). Before completion these show as an IN PROGRESS report and a SAMPLE certificate.
-- Admin practical form: one row per skill with compact result buttons (Competent / Not yet / N/A / Not seen), an "Add notes" tick box that reveals a notes box (notes are only saved where it's ticked), and "Mark all competent".
+- Admin practical form: one row per skill with compact result buttons (Competent / Not yet / N/A / Not seen), an "Add notes" tick box that reveals a notes box (notes are only saved where it's ticked). Deliberately no "mark all" shortcut, so every skill has to be observed and recorded one by one.
 
 ## Working rules
 - Change the database with new migration SQL, saved in `supabase/migrations/` and also appended to `schema.sql` so a fresh install stays complete. Never edit live data without asking the owner first.

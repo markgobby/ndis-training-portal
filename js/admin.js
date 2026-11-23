@@ -753,7 +753,7 @@ async function practical(enrId, pid) {
         <div><label>Location</label><input name="location" value="${esc(p.location)}" placeholder="e.g. participant's home, simulation lab"></div>
         <div><label>Assessor</label><input name="assessor_name" value="${esc(p.assessor_name)}"></div>
       </div>
-      <div class="row between"><h2>Observation checklist</h2><button type="button" class="btn small secondary" id="allok">Mark all competent</button></div>
+      <h2>Observation checklist</h2>
       <p class="small muted">Tap a result for each skill you observe. Tick "Add notes" only where you want to record something.</p>
       ${comps.length ? comps.map((c, i) => `${i === 0 || comps[i - 1].group_title !== c.group_title ? `<h3>${esc(c.group_title)}</h3>` : ''}<div class="obs">
         <div class="obs-q">${i + 1}. ${esc(c.description)}</div>
@@ -769,7 +769,6 @@ async function practical(enrId, pid) {
   $$('[data-note]').forEach((cb) => (cb.onchange = () => {
     const box = $(`[name="n_${cb.dataset.note}"]`); box.hidden = !cb.checked; if (cb.checked) box.focus();
   }));
-  $('#allok') && ($('#allok').onclick = () => $$('.seg input[value="competent"]').forEach((r) => (r.checked = true)));
   $('#pf').onsubmit = async (ev) => {
     ev.preventDefault(); const outcome = ev.submitter?.value || 'draft'; const d = formData(ev.target);
     // notes only count where "Add notes" is ticked
