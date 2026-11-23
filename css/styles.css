@@ -184,3 +184,5 @@ html, body { overflow-x: hidden; }
 .steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .steps div { min-width: 0; font-size: clamp(.68rem, 2.9vw, .8rem); }
 @media (max-width: 360px) { .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.trainerdemo { margin-top: 1rem; border: 2px dashed var(--brand); border-radius: var(--radius); padding: .6rem .9rem; background: #fbfdfd; }
+.trainerdemo summary { font-weight: 700; color: var(--brand); cursor: pointer; padding: .2rem 0; }

@@ -13,6 +13,27 @@ async function openWorkbook(id) {
   location.replace(`#/wb/${id}/${count && !a.learning_done_at && editable ? 'learn' : 'assess'}`);
 }
 
+// Demo guests only: an interactive copy of the trainer's observation form. Nothing is saved.
+function trainerDemo(eid, comps) {
+  const R = [['competent', '✓ Competent', 'ok'], ['not_yet', '✗ Not yet', 'bad'], ['not_applicable', 'N/A', ''], ['not_assessed', 'Not seen', '']];
+  let group = null;
+  return `<details class="trainerdemo"><summary>Trainer's view: try the practical form</summary>
+    <div class="notice info small">This is what your trainer fills in while watching you during the practical. Have a go. In the demo, nothing is saved.</div>
+    ${comps.map((c, i) => {
+      const head = c.group_title !== group ? `<h3 class="small" style="margin:.8rem 0 0">${esc(c.group_title)}</h3>` : '';
+      group = c.group_title;
+      return `${head}<div class="obs"><div class="obs-q">${i + 1}. ${esc(c.description)}</div>
+        <div class="seg" role="radiogroup" aria-label="Result for item ${i + 1}">${R.map(([v, l, cls]) =>
+          `<label class="${cls}"><input type="radio" name="d_${eid}_${c.id}" value="${v}" ${v === 'not_assessed' ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div>
+        <label class="notetoggle"><input type="checkbox" data-dnote="${eid}_${c.id}">Add notes</label>
+        <textarea class="obsnote" data-dbox="${eid}_${c.id}" placeholder="What did you observe?" hidden></textarea></div>`;
+    }).join('')}
+    <label for="dnotes_${eid}">Assessor notes</label><textarea id="dnotes_${eid}" style="min-height:3.5rem"></textarea>
+    <div class="row" style="margin-top:.6rem"><button type="button" class="btn ok" data-dsign="competent">Sign off: Competent</button>
+      <button type="button" class="btn danger" data-dsign="not_yet">Sign off: Not yet competent</button></div>
+  </details>`;
+}
+
 async function learn(id) {
   const a = must(await sb.from('assignments').select('*, workbooks(title, version, description)').eq('id', id).single());
   const items = must(await sb.from('learning_items').select('*').eq('workbook_id', a.workbook_id).order('position'));
@@ -142,7 +163,8 @@ async function dashboard() {
         return `${head}<li><span class="tick ${cls}" aria-label="${label}">${sym}</span><span>${esc(c.description)}
           ${r ? `<span class="badge ${cls}" style="margin-left:.3rem">${label}</span>` : ''}${r?.notes ? `<div class="small muted">Trainer note: ${esc(r.notes)}</div>` : ''}</span></li>`;
       }).join('')}</ul>` : '<p class="muted small">Your trainer hasn\'t added the practical checklist yet.</p>'}
-      ${last?.notes ? `<div class="notice info small">Assessor notes: ${esc(last.notes)}</div>` : ''}`;
+      ${last?.notes ? `<div class="notice info small">Assessor notes: ${esc(last.notes)}</div>` : ''}
+      ${state.user?.is_anonymous && comps.length ? trainerDemo(e.id, comps) : ''}`;
 
     const reviewPanel = `<h3 style="margin-top:.3rem">Workbook results</h3>
       ${mine.length ? `<ul class="checklist">${mine.map((a) => `<li><span class="tick ${a.status === 'competent' ? 'ok' : a.status === 'resubmit' ? 'bad' : ''}">${a.status === 'competent' ? '✓' : a.status === 'resubmit' ? '!' : '○'}</span>
@@ -172,6 +194,17 @@ async function dashboard() {
   view(`<h1>Welcome, ${esc(state.profile.full_name?.split(' ')[0] || '')}</h1>
     ${pending.length ? `<div class="notice"><b>Please give feedback:</b><ul style="margin:.3rem 0 0">${pending.join('')}</ul></div>` : ''}
     ${blocks || '<div class="card">You are not enrolled in any training yet.</div>'}`);
+  $$('[data-dnote]').forEach((cb) => (cb.onchange = () => {
+    const box = $(`[data-dbox="${cb.dataset.dnote}"]`); box.hidden = !cb.checked; if (cb.checked) box.focus();
+  }));
+  $$('[data-dsign]').forEach((b) => (b.onclick = () => {
+    const form = b.closest('.trainerdemo');
+    const total = form.querySelectorAll('.obs').length;
+    const seen = [...form.querySelectorAll('.seg input:checked')].filter((r) => r.value !== 'not_assessed').length;
+    toast(b.dataset.dsign === 'competent' && seen < total
+      ? `Demo: ${total - seen} skill(s) still "Not seen". The real form asks the trainer to confirm before signing off.`
+      : 'Demo only: in the real portal this records the result, updates your progress and unlocks your certificate.');
+  }));
   $$('[data-tab]').forEach((b) => (b.onclick = () => {
     $$(`[data-tab][data-e="${b.dataset.e}"]`).forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-selected', x === b); });
     $$(`[data-panel][data-e="${b.dataset.e}"]`).forEach((p) => (p.hidden = p.dataset.panel !== b.dataset.tab));
