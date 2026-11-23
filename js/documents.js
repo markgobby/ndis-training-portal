@@ -21,7 +21,7 @@ async function load(enrId) {
   const [asg, pracs, comps] = await Promise.all([
     sb.from('assignments').select('*, workbooks(title, version)').eq('enrollment_id', enrId),
     sb.from('practical_assessments').select('*, practical_results(*)').eq('enrollment_id', enrId).neq('outcome', 'draft').order('assessed_on'),
-    sb.from('competencies').select('*').eq('package_id', e.package_id).order('position'),
+    sb.rpc('enrollment_competencies', { p_enr: enrId }),
   ]).then((r) => r.map((x) => must(x)));
   return { e, asg, pracs, comps };
 }
@@ -49,14 +49,14 @@ function report(e, asg, pracs, comps, back) {
       <div>Name</div><div><b>${esc(e.profiles.full_name)}</b></div>
       ${e.profiles.dob ? `<div>Date of birth</div><div>${fmtDate(e.profiles.dob)}</div>` : ''}
       <div>Organisation</div><div>${esc(e.organisations?.name || '—')}</div>
-      <div>Training package</div><div>${esc(e.packages.name)} (${esc(e.packages.code)})</div>
+      <div>Training</div><div>${esc(e.title || e.packages?.name)}${e.packages ? ` (${esc(e.packages.code)})` : ''}</div>
       <div>Enrolled</div><div>${fmtDate(e.started_at)}</div>
       <div>Status</div><div>${e.status === 'completed' ? '<b>Completed – competent</b>' : esc(e.status.replace(/_/g, ' '))}</div>
       ${e.certificate_number ? `<div>Certificate no.</div><div>${esc(e.certificate_number)}</div>
       <div>Completed</div><div>${fmtDate(e.completed_at)}</div>` : ''}
       ${e.expires_at ? `<div>Refresher due</div><div>${fmtDate(e.expires_at)}</div>` : ''}
     </div>
-    ${e.packages.description ? `<p>${esc(e.packages.description)}</p>` : ''}
+    ${e.packages?.description ? `<p>${esc(e.packages.description)}</p>` : ''}
 
     <h2>Theory – workbooks</h2>
     <table><thead><tr><th>Workbook</th><th>Version</th><th>Attempts</th><th>Score</th><th>Result</th><th>Date</th></tr></thead><tbody>
@@ -73,7 +73,7 @@ function report(e, asg, pracs, comps, back) {
         <div>Outcome</div><div><b>${last.outcome === 'competent' ? 'Competent' : 'Not yet competent'}</b></div>
       </div>
       ${comps.length ? `<table style="margin-top:.75rem"><thead><tr><th>#</th><th>Competency</th><th>Result</th><th>Notes</th></tr></thead><tbody>
-        ${comps.map((c, i) => `<tr><td>${i + 1}</td><td>${esc(c.description)}</td><td class="nowrap">${RES[resMap[c.id]?.result] || 'Not assessed'}</td><td>${esc(resMap[c.id]?.notes || '')}</td></tr>`).join('')}
+        ${comps.map((c, i) => `${i === 0 || comps[i - 1].group_title !== c.group_title ? `<tr><td colspan="4"><b>${esc(c.group_title)}</b></td></tr>` : ''}<tr><td>${i + 1}</td><td>${esc(c.description)}</td><td class="nowrap">${RES[resMap[c.id]?.result] || 'Not assessed'}</td><td>${esc(resMap[c.id]?.notes || '')}</td></tr>`).join('')}
       </tbody></table>` : ''}
       ${last.notes ? `<p><b>Assessor notes:</b> ${esc(last.notes)}</p>` : ''}
       ${pracs.length > 1 ? `<p class="small muted">Earlier attempts: ${pracs.slice(0, -1).map((p) => `${fmtDate(p.assessed_on)} (${p.outcome === 'competent' ? 'competent' : 'not yet competent'})`).join(', ')}</p>` : ''}`
@@ -102,7 +102,7 @@ function certificate(e, back) {
     <div>This is to certify that</div>
     <div class="name">${esc(e.profiles.full_name)}</div>
     <div>has successfully completed theory and practical assessment and been deemed competent in</div>
-    <div class="course" style="margin-top:.5rem">${esc(e.packages.name)}</div>
+    <div class="course" style="margin-top:.5rem">${esc(e.title || e.packages?.name)}</div>
     <div class="muted">${esc(BRAND.tagline)}</div>
     ${e.organisations?.name ? `<div class="small muted" style="margin-top:.4rem">${esc(e.organisations.name)}</div>` : ''}
     <div class="meta">

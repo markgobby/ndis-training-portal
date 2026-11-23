@@ -134,3 +134,5 @@ tr.click { cursor: pointer; } tr.click:hover { background: var(--brand-soft); }
   .cert h1 { font-size: 1.6rem; } .cert .name { font-size: 1.4rem; } .cert .frame { padding: 1rem; }
   .cert .meta { flex-direction: column; gap: 1rem; }
 }
+.ack { margin-top: 2rem; padding: 1rem 1.1rem; border: 2px solid var(--brand-soft); border-radius: var(--radius); background: #fbfdfd; }
+.guestbar { background: var(--warn-soft); color: #5a3a00; text-align: center; font-size: .85rem; padding: .35rem 1rem; }

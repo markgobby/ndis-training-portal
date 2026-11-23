@@ -21,8 +21,8 @@ with o as (insert into organisations(name, contact_name) values ('Demo Organisat
                         case q.position when 4 then 'Coughing, choking, wet/gurgly voice, breathing difficulty, colour change; stop feed, sit upright, call for help / follow emergency plan' end
            from q returning 1),
      pw as (insert into package_workbooks(package_id, workbook_id, position) select p.id, w.id, 1 from p, w returning 1),
-     c as (insert into competencies(package_id, position, description)
-           select p.id, x.n, x.d from p, (values
+     c as (insert into competencies(workbook_id, position, description)
+           select w.id, x.n, x.d from w, (values
              (1, 'Performs hand hygiene and uses PPE correctly'),
              (2, 'Reads and follows the participant''s mealtime / enteral feeding plan'),
              (3, 'Positions the participant correctly before, during and after the feed'),

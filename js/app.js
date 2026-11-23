@@ -1,5 +1,5 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_ANON_KEY, BRAND } from './config.js';
+import { SUPABASE_URL, SUPABASE_ANON_KEY, BRAND, DEMO_INVITE_CODE } from './config.js';
 
 export const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 export const state = { user: null, profile: null, org: '' };
@@ -91,9 +91,11 @@ async function renderTopbar() {
       render();
     };
   } else {
+    const guest = state.user?.is_anonymous;
     bar.innerHTML = `<div class="inner"><a class="title" href="#/">${esc(BRAND.name)}</a>
       <span class="small">${esc(state.profile.full_name || '')}</span>
-      <button class="btn small" id="logout">Sign out</button></div>`;
+      <button class="btn small" id="logout">${guest ? 'End demo' : 'Sign out'}</button></div>
+      ${guest ? '<div class="guestbar">Demo mode: explore freely. Nothing you do here is real or kept.</div>' : ''}`;
   }
   $('#logout').onclick = async () => { await sb.auth.signOut(); state.profile = null; go('#/login'); };
 }
@@ -188,6 +190,7 @@ let learner, admin, docs;
 export async function render() {
   const h = location.hash || '#/';
   if (h === '#/newpass') return newPasswordView();
+  if (h === '#/try') return tryDemo();
   if (!state.user) {
     await renderTopbar();
     return h === '#/join' ? joinView() : loginView();
@@ -198,6 +201,24 @@ export async function render() {
   if (role === 'admin') { admin ||= await import('./admin.js'); return admin.route(h); }
   if (role === 'learner') { learner ||= await import('./learner.js'); return learner.route(h); }
   view(`<div class="card narrow center"><h1>Account pending</h1><p>Your account has been created but hasn't been given access yet. Please contact your trainer.</p></div>`);
+}
+
+// Guest demo for presentations: a private, temporary learner account with no sign-up
+async function tryDemo() {
+  if (!DEMO_INVITE_CODE) { view('<div class="card narrow center"><h1>Demo not available</h1></div>'); return; }
+  const { data: { session } } = await sb.auth.getSession();
+  if (session) { location.replace('#/'); return boot(); }
+  view('<div class="card narrow center"><h1>Setting up your demo…</h1><p class="muted">One moment.</p></div>');
+  const n = String(Math.floor(1000 + Math.random() * 9000));
+  const { error } = await sb.auth.signInAnonymously({ options: { data: { invite_code: DEMO_INVITE_CODE, full_name: `Guest ${n}` } } });
+  if (error) {
+    console.error(error);
+    view(`<div class="card narrow center"><h1>Demo unavailable</h1><p>The guest demo isn't switched on right now. Please ask the presenter.</p>
+      <p class="small muted">${esc(error.message)}</p></div>`);
+    return;
+  }
+  location.replace('#/');
+  await boot();
 }
 
 async function boot() {

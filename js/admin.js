@@ -1,9 +1,35 @@
-import { sb, state, BRAND, $, $$, esc, fmtDate, view, go, toast, must, formData, badge, stageSteps } from './app.js';
+import { sb, state, BRAND, $, $$, esc, fmtDate, view, go, toast, must, formData, badge, stageSteps, formatText } from './app.js';
 
 const orgF = (q, col) => (state.org ? q.eq(col, state.org) : q);
 const orgName = async () => state.org ? must(await sb.from('organisations').select('name').eq('id', state.org).single()).name : 'All organisations';
 const opt = (rows, sel, label = (r) => r.name) => rows.map((r) => `<option value="${r.id}" ${r.id === sel ? 'selected' : ''}>${esc(label(r))}</option>`).join('');
 const uuid = () => crypto.randomUUID();
+export const tName = (e) => e?.title || e?.packages?.name || 'Training';
+
+// ---- "Available to" organisation scoping for workbooks and packages (no rows = all organisations) ----
+const availableTo = (links, org = state.org) => !org || !links?.length || links.some((l) => l.organisation_id === org);
+const orgList = (links, orgsById) => links?.length ? links.map((l) => orgsById[l.organisation_id] || '?').join(', ') : 'All organisations';
+const orgPicker = (orgsL, selected) => `<fieldset class="qedit" style="margin-top:1rem"><legend style="font-weight:700">Available to</legend>
+  <label class="choice"><input type="radio" name="org_mode" value="all" ${selected.length ? '' : 'checked'}>All organisations</label>
+  <label class="choice"><input type="radio" name="org_mode" value="some" ${selected.length ? 'checked' : ''}>Only these organisations</label>
+  <div id="orgpick" style="padding-left:1.5rem" ${selected.length ? '' : 'hidden'}>${orgsL.map((o) =>
+    `<label class="choice"><input type="checkbox" value="${o.id}" ${selected.includes(o.id) ? 'checked' : ''}>${esc(o.name)}</label>`).join('') || '<p class="muted small">No organisations yet.</p>'}</div>
+  <div class="small muted">Used to filter lists and invite codes when you switch organisation at the top.</div></fieldset>`;
+const wireOrgPicker = () => $$('[name="org_mode"]').forEach((r) => (r.onchange = () => ($('#orgpick').hidden = $('[name="org_mode"]:checked').value === 'all')));
+const readOrgPicker = () => $('[name="org_mode"]:checked')?.value === 'some' ? $$('#orgpick input:checked').map((x) => x.value) : [];
+async function saveOrgLinks(table, keyCol, id, orgIds) {
+  must(await sb.from(table).delete().eq(keyCol, id));
+  if (orgIds.length) must(await sb.from(table).insert(orgIds.map((o) => ({ [keyCol]: id, organisation_id: o }))));
+}
+const orgsMap = async () => Object.fromEntries(must(await sb.from('organisations').select('id,name')).map((o) => [o.id, o.name]));
+// Keep ids for unchanged lines so past practical results stay linked
+async function saveSkills(lines, existing, owner) {
+  const keep = existing.filter((c) => lines.includes(c.description));
+  const drop = existing.filter((c) => !lines.includes(c.description));
+  if (drop.length) must(await sb.from('competencies').delete().in('id', drop.map((c) => c.id)));
+  const rows = lines.map((l, i) => ({ id: keep.find((c) => c.description === l)?.id || uuid(), package_id: null, workbook_id: null, ...owner, position: i + 1, description: l }));
+  if (rows.length) must(await sb.from('competencies').upsert(rows));
+}
 
 export async function route(h) {
   let m;
@@ -13,6 +39,7 @@ export async function route(h) {
   if (h === '#/a/review') return reviewQueue();
   if ((m = h.match(/^#\/a\/review\/([\w-]+)$/))) return review(m[1]);
   if (h === '#/a/workbooks') return workbooks();
+  if ((m = h.match(/^#\/a\/preview\/([\w-]+)$/))) return preview(m[1]);
   if ((m = h.match(/^#\/a\/workbook\/([\w-]+)$/))) return workbookEditor(m[1]);
   if (h === '#/a/packages') return packages();
   if ((m = h.match(/^#\/a\/package\/([\w-]+)$/))) return packageEditor(m[1]);
@@ -28,8 +55,8 @@ async function dashboard() {
   const [lc, queue, ready, cert, done] = await Promise.all([
     orgF(sb.from('profiles').select('id', { count: 'exact', head: true }).eq('role', 'learner'), 'organisation_id'),
     orgF(sb.from('assignments').select('id, submitted_at, workbooks(title), profiles(full_name), enrollments!inner(organisation_id)').eq('status', 'submitted').order('submitted_at'), 'enrollments.organisation_id'),
-    orgF(sb.from('enrollments').select('id, learner_id, profiles(full_name), packages(name), organisations(name)').eq('status', 'ready_for_practical'), 'organisation_id'),
-    orgF(sb.from('enrollments').select('id, learner_id, profiles(full_name), packages(name), organisations(name)').eq('status', 'practical_complete'), 'organisation_id'),
+    orgF(sb.from('enrollments').select('id, learner_id, profiles(full_name), title, packages(name), organisations(name)').eq('status', 'ready_for_practical'), 'organisation_id'),
+    orgF(sb.from('enrollments').select('id, learner_id, profiles(full_name), title, packages(name), organisations(name)').eq('status', 'practical_complete'), 'organisation_id'),
     orgF(sb.from('enrollments').select('id', { count: 'exact', head: true }).eq('status', 'completed'), 'organisation_id'),
   ]);
   [lc, queue, ready, cert, done].forEach((r) => must(r));
@@ -46,28 +73,39 @@ async function dashboard() {
       <section class="card"><h2 style="margin-top:0">To mark</h2>${list(queue.data, 'Nothing waiting.', (a) =>
         `<li><a href="#/a/review/${a.id}">${esc(a.profiles?.full_name)} – ${esc(a.workbooks.title)}</a> <span class="small muted">${fmtDate(a.submitted_at)}</span></li>`)}</section>
       <section class="card"><h2 style="margin-top:0">Ready for practical training</h2>${list(ready.data, 'No one yet.', (e) =>
-        `<li><a href="#/a/learner/${e.learner_id}">${esc(e.profiles?.full_name)}</a> – ${esc(e.packages.name)} <span class="small muted">${esc(e.organisations?.name || '')}</span></li>`)}</section>
+        `<li><a href="#/a/learner/${e.learner_id}">${esc(e.profiles?.full_name)}</a> – ${esc(tName(e))} <span class="small muted">${esc(e.organisations?.name || '')}</span></li>`)}</section>
       <section class="card"><h2 style="margin-top:0">Ready to issue certificate</h2>${list(cert.data, 'No one yet.', (e) =>
-        `<li><a href="#/a/learner/${e.learner_id}">${esc(e.profiles?.full_name)}</a> – ${esc(e.packages.name)}</li>`)}</section>
+        `<li><a href="#/a/learner/${e.learner_id}">${esc(e.profiles?.full_name)}</a> – ${esc(tName(e))}</li>`)}</section>
     </div>`);
 }
 
 // ---------------- learners ----------------
+let showGuests = false;
 async function learners() {
-  const rows = must(await orgF(sb.from('profiles').select('id, full_name, email, dob, created_at, organisations(name), enrollments!enrollments_learner_id_fkey(status, packages(name))')
+  const all = must(await orgF(sb.from('profiles').select('id, full_name, email, dob, created_at, organisations(name), enrollments!enrollments_learner_id_fkey(status, title, packages(name))')
     .in('role', ['learner', 'pending']).order('full_name'), 'organisation_id'));
+  const guests = all.filter((p) => !p.email);   // guest demo accounts have no email
+  const rows = showGuests ? all : all.filter((p) => p.email);
   view(`<div class="row between"><h1>Learners <span class="muted small">· ${esc(await orgName())}</span></h1>
       <input id="search" placeholder="Search name or email" style="max-width:280px"></div>
-    <p class="small muted">Learners create their own accounts with an <a href="#/a/invites">invite code</a>.</p>
+    <p class="small muted">Learners create their own accounts with an <a href="#/a/invites">invite code</a>.
+      ${guests.length ? `<label style="display:inline;font-weight:400;margin-left:.5rem"><input type="checkbox" id="sg" ${showGuests ? 'checked' : ''}>Show ${guests.length} demo guest${guests.length === 1 ? '' : 's'}</label>
+        ${showGuests ? '<button class="btn small danger" id="delguests">Remove all demo guests</button>' : ''}` : ''}</p>
     <div class="card table-wrap"><table><thead><tr><th>Name</th><th>Organisation</th><th>Training</th><th>Joined</th></tr></thead><tbody>
     ${rows.map((p) => `<tr class="click" data-id="${p.id}" data-s="${esc((p.full_name + ' ' + p.email).toLowerCase())}">
-      <td>${esc(p.full_name || '(no name)')}<div class="small muted">${esc(p.email)}</div></td>
+      <td>${esc(p.full_name || '(no name)')}${p.email ? '' : ' <span class="badge warn">Demo guest</span>'}<div class="small muted">${esc(p.email)}</div></td>
       <td>${esc(p.organisations?.name || '—')}</td>
-      <td>${p.enrollments.map((e) => `${esc(e.packages.name)} ${badge(e.status)}`).join('<br>') || '—'}</td>
+      <td>${p.enrollments.map((e) => `${esc(tName(e))} ${badge(e.status)}`).join('<br>') || '—'}</td>
       <td class="nowrap">${fmtDate(p.created_at)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">No learners yet.</td></tr>'}
     </tbody></table></div>`);
   $$('tr.click').forEach((tr) => (tr.onclick = () => go(`#/a/learner/${tr.dataset.id}`)));
   $('#search').oninput = (e) => $$('tr.click').forEach((tr) => (tr.hidden = !tr.dataset.s.includes(e.target.value.toLowerCase())));
+  $('#sg') && ($('#sg').onchange = (e) => { showGuests = e.target.checked; learners(); });
+  $('#delguests') && ($('#delguests').onclick = async () => {
+    if (!confirm(`Remove all ${guests.length} demo guest accounts and their demo answers?`)) return;
+    must(await sb.from('profiles').delete().in('id', guests.map((g) => g.id)));
+    toast('Demo guests removed'); learners();
+  });
 }
 
 async function learner(id) {
@@ -86,7 +124,7 @@ async function learner(id) {
     const pr = pracs.filter((x) => x.enrollment_id === e.id);
     const avail = wbs.filter((w) => !mine.some((a) => a.workbook_id === w.id));
     return `<section class="card">
-      <div class="row between"><h2 style="margin:0">${esc(e.packages.name)} <span class="small muted">${esc(e.packages.code)}</span></h2>${badge(e.status)}</div>
+      <div class="row between"><h2 style="margin:0">${esc(tName(e))} <span class="small muted">${esc(e.packages?.code || 'Custom selection')}</span></h2>${badge(e.status)}</div>
       ${stageSteps(e.status)}
       <h3>Workbooks</h3>
       <div class="table-wrap"><table><thead><tr><th>Workbook</th><th>Status</th><th>Score</th><th>Submitted</th><th></th></tr></thead><tbody>
@@ -249,14 +287,49 @@ async function review(id) {
 
 // ---------------- workbooks ----------------
 async function workbooks() {
-  const rows = must(await sb.from('workbooks').select('*, questions(count), assignments(count)').order('title'));
-  view(`<div class="row between"><h1>Workbooks</h1><a class="btn" href="#/a/workbook/new">New workbook</a></div>
-    <p class="small muted">Build a workbook question by question, or import questions from a spreadsheet (CSV).</p>
-    <div class="card table-wrap"><table><thead><tr><th>Title</th><th>Version</th><th>Questions</th><th>Assigned</th><th>Status</th></tr></thead><tbody>
-    ${rows.map((w) => `<tr class="click" data-id="${w.id}"><td>${esc(w.title)}</td><td>${esc(w.version)}</td><td>${w.questions[0]?.count ?? 0}</td>
-      <td>${w.assignments[0]?.count ?? 0}</td><td>${w.is_active ? '<span class="badge ok">Active</span>' : '<span class="badge">Archived</span>'}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">No workbooks yet.</td></tr>'}
+  const [rows, orgsById] = await Promise.all([
+    sb.from('workbooks').select('*, questions(count), learning_items(count), competencies(count), assignments(count), workbook_organisations(organisation_id), package_workbooks(packages(code))').order('title').then((r) => must(r)),
+    orgsMap(),
+  ]);
+  const list = rows.filter((w) => availableTo(w.workbook_organisations));
+  const n = (x) => x?.[0]?.count ?? 0;
+  view(`<div class="row between"><h1>Workbook library <span class="muted small">· ${esc(await orgName())}</span></h1><a class="btn" href="#/a/workbook/new">New workbook</a></div>
+    <p class="small muted">Each workbook has Part 1 learning material, Part 2 knowledge questions and the practical skills it covers. ${state.org ? 'Showing workbooks available to this organisation.' : ''}</p>
+    <div class="card table-wrap"><table><thead><tr><th>Workbook</th><th>Learning</th><th>Questions</th><th>Practical skills</th><th>In packages</th><th>Assigned</th><th></th></tr></thead><tbody>
+    ${list.map((w) => `<tr class="click" data-id="${w.id}">
+      <td><b>${esc(w.title)}</b> <span class="small muted">v${esc(w.version)}</span> ${w.is_active ? '' : '<span class="badge">Archived</span>'}
+        <div class="small muted">${esc(orgList(w.workbook_organisations, orgsById))}</div></td>
+      <td>${n(w.learning_items)}</td><td>${n(w.questions)}</td><td>${n(w.competencies)}</td>
+      <td class="small">${w.package_workbooks.map((x) => esc(x.packages?.code)).join(', ') || '—'}</td>
+      <td>${n(w.assignments)}</td>
+      <td class="right nowrap"><a class="btn small secondary" href="#/a/preview/${w.id}" data-stop>Preview</a></td></tr>`).join('') || '<tr><td colspan="7" class="muted">No workbooks yet.</td></tr>'}
     </tbody></table></div>`);
+  $$('[data-stop]').forEach((a) => (a.onclick = (e) => e.stopPropagation()));
   $$('tr.click').forEach((tr) => (tr.onclick = () => go(`#/a/workbook/${tr.dataset.id}`)));
+}
+
+// What the learner sees, without needing a learner account
+async function preview(id) {
+  const [w, items, qs, skills] = await Promise.all([
+    sb.from('workbooks').select('*').eq('id', id).single(),
+    sb.from('learning_items').select('*').eq('workbook_id', id).order('position'),
+    sb.from('questions').select('*').eq('workbook_id', id).order('position'),
+    sb.from('competencies').select('*').eq('workbook_id', id).order('position'),
+  ]).then((r) => r.map((x) => must(x)));
+  let pn = 0;
+  view(`<div class="row"><a href="#/a/workbook/${id}">← Edit workbook</a><span class="badge warn">Preview – nothing is saved</span></div>
+    <div class="card"><h1>${esc(w.title)}</h1>
+    <h2>Part 1 · Learning</h2>
+    ${items.map((it) => it.kind === 'content' ? `<section class="learn-block">${it.title ? `<h2>${esc(it.title)}</h2>` : ''}${formatText(it.body)}</section>`
+      : `<section class="practice"><div class="small" style="font-weight:700;color:var(--brand)">Check your understanding ${++pn}</div><div>${esc(it.body)}</div>
+        <ul>${(it.qtype === 'true_false' ? ['True', 'False'] : it.options).map((o) => `<li>${esc(o)}${o === it.answer ? ' ✓' : ''}</li>`).join('')}</ul>
+        ${it.explanation ? `<div class="small muted">${esc(it.explanation)}</div>` : ''}</section>`).join('') || '<p class="muted">No learning material.</p>'}
+    <h2>Part 2 · Knowledge assessment</h2>
+    ${qs.map((q, i) => `<div class="question"><span class="qnum">Q${i + 1}.</span> ${esc(q.prompt)} <span class="small muted">(${q.qtype.replace('_', ' ')}, ${q.marks} mark${q.marks === 1 ? '' : 's'})</span>
+      ${q.qtype === 'multiple_choice' ? `<ul>${q.options.map((o) => `<li>${esc(o)}</li>`).join('')}</ul>` : ''}</div>`).join('') || '<p class="muted">No questions.</p>'}
+    <h2>Practical skills assessed</h2>
+    ${skills.length ? `<ol>${skills.map((c) => `<li>${esc(c.description)}</li>`).join('')}</ol>` : '<p class="muted">None linked to this workbook.</p>'}
+    </div>`);
 }
 
 function parseCSV(text) {
@@ -275,7 +348,8 @@ function parseCSV(text) {
 
 async function workbookEditor(id) {
   const isNew = id === 'new';
-  let w = { title: '', description: '', version: '1.0', pass_percent: 100, is_active: true }, qs = [], used = 0, lis = [];
+  let w = { title: '', description: '', version: '1.0', pass_percent: 100, is_active: true }, qs = [], used = 0, lis = [], skills = [], wOrgs = [];
+  const orgsL = must(await sb.from('organisations').select('id,name').order('name'));
   if (!isNew) {
     w = must(await sb.from('workbooks').select('*').eq('id', id).single());
     const raw = must(await sb.from('questions').select('*').eq('workbook_id', id).order('position'));
@@ -284,6 +358,8 @@ async function workbookEditor(id) {
     qs = raw.map((q) => ({ ...q, correct_answer: km[q.id]?.correct_answer || '', marking_guide: km[q.id]?.marking_guide || '' }));
     used = (await sb.from('assignments').select('id', { count: 'exact', head: true }).eq('workbook_id', id).neq('status', 'not_started')).count || 0;
     lis = must(await sb.from('learning_items').select('*').eq('workbook_id', id).order('position'));
+    skills = must(await sb.from('competencies').select('*').eq('workbook_id', id).order('position'));
+    wOrgs = must(await sb.from('workbook_organisations').select('organisation_id').eq('workbook_id', id)).map((x) => x.organisation_id);
   }
   const original = new Set(qs.map((q) => q.id));
   const originalLi = new Set(lis.map((x) => x.id));
@@ -363,6 +439,8 @@ async function workbookEditor(id) {
       </div>
       <label>Description / instructions for learners</label><textarea name="description">${esc(w.description)}</textarea>
       <label class="choice" style="max-width:260px"><input type="checkbox" name="is_active" ${w.is_active ? 'checked' : ''}>Active (can be assigned)</label>
+      ${orgPicker(orgsL, wOrgs)}
+      ${!isNew ? `<p><a class="btn small secondary" href="#/a/preview/${id}">Preview as learner</a></p>` : ''}
       <h2>Part 1 · Learning material</h2>
       <p class="small muted">What the learner needs to know, with optional practice questions. Practice answers are never recorded.</p>
       <div id="lis"></div>
@@ -379,11 +457,15 @@ async function workbookEditor(id) {
         Make it in Excel or Google Sheets, then File › Download › CSV. <button type="button" class="linkbtn" id="tmpl">Download a template</button></p>
         <input type="file" id="csv" accept=".csv,text/csv">
       </div>
+      <h2>Practical skills</h2>
+      <p class="small muted">The skills from this workbook that you'll check in the practical assessment, one per line. They're added automatically to the practical checklist of any package or invite that includes this workbook.</p>
+      <textarea name="skills" style="min-height:8rem" placeholder="Performs hand hygiene and uses PPE correctly&#10;Positions the participant correctly&#10;…">${esc(skills.map((c) => c.description).join('\n'))}</textarea>
       <div class="sticky-actions row"><button class="btn">Save workbook</button>
         ${!isNew ? '<button type="button" class="btn secondary" id="dup">Save as new version</button>' : ''}</div>
     </form>`);
   drawQs();
   drawLi();
+  wireOrgPicker();
   $('#addc').onclick = () => { lis = readLi(); lis.push({ id: uuid(), kind: 'content', title: '', body: '' }); drawLi(); };
   $('#addp').onclick = () => { lis = readLi(); lis.push({ id: uuid(), kind: 'practice', qtype: 'multiple_choice', body: '', options: [], answer: '', explanation: '' }); drawLi(); };
 
@@ -442,6 +524,9 @@ async function workbookEditor(id) {
         options: q.qtype === 'multiple_choice' ? q.options : [], marks: q.marks }))));
       must(await sb.from('question_keys').upsert(qs.map((q) => ({ question_id: q.id, correct_answer: q.correct_answer || null, marking_guide: q.marking_guide || null }))));
     }
+    const skillLines = (d.skills || '').split('\n').map((x) => x.trim()).filter(Boolean);
+    await saveSkills(skillLines, asNew ? [] : skills, { workbook_id: wid });
+    await saveOrgLinks('workbook_organisations', 'workbook_id', wid, readOrgPicker());
     if (asNew && confirm('New version saved. Archive the old version so it is no longer assigned to new learners?')) {
       must(await sb.from('workbooks').update({ is_active: false }).eq('id', id));
       toast('Remember to swap the new version into your packages');
@@ -454,27 +539,42 @@ async function workbookEditor(id) {
 
 // ---------------- packages ----------------
 async function packages() {
-  const rows = must(await sb.from('packages').select('*, package_workbooks(count), competencies(count), enrollments(count)').order('code'));
-  view(`<div class="row between"><h1>Packages</h1><a class="btn" href="#/a/package/new">New package</a></div>
-    <p class="small muted">A package plan bundles workbooks and a practical competency checklist. Learners enter the package plan number when they sign up.</p>
-    <div class="card table-wrap"><table><thead><tr><th>Plan number</th><th>Name</th><th>Workbooks</th><th>Competencies</th><th>Enrolled</th><th>Status</th></tr></thead><tbody>
-    ${rows.map((p) => `<tr class="click" data-id="${p.id}"><td><b>${esc(p.code)}</b></td><td>${esc(p.name)}</td><td>${p.package_workbooks[0]?.count ?? 0}</td>
-      <td>${p.competencies[0]?.count ?? 0}</td><td>${p.enrollments[0]?.count ?? 0}</td><td>${p.is_active ? '<span class="badge ok">Active</span>' : '<span class="badge">Inactive</span>'}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">No packages yet.</td></tr>'}
+  const [rows, orgsById] = await Promise.all([
+    sb.from('packages').select('*, package_workbooks(workbooks(title, competencies(count))), competencies(count), enrollments(count), package_organisations(organisation_id)').order('code').then((r) => must(r)),
+    orgsMap(),
+  ]);
+  const list = rows.filter((p) => availableTo(p.package_organisations));
+  view(`<div class="row between"><h1>Packages <span class="muted small">· ${esc(await orgName())}</span></h1><a class="btn" href="#/a/package/new">New package</a></div>
+    <p class="small muted">A package bundles one or more workbooks. Its practical checklist is built from the skills in those workbooks, plus any whole-package skills you add.</p>
+    <div class="card table-wrap"><table><thead><tr><th>Package</th><th>Workbooks</th><th>Practical skills</th><th>Enrolled</th><th>Status</th></tr></thead><tbody>
+    ${list.map((p) => {
+      const skillCount = p.package_workbooks.reduce((t, x) => t + (x.workbooks?.competencies?.[0]?.count ?? 0), 0) + (p.competencies[0]?.count ?? 0);
+      return `<tr class="click" data-id="${p.id}"><td><b>${esc(p.code)}</b> ${esc(p.name)}<div class="small muted">${esc(orgList(p.package_organisations, orgsById))}</div></td>
+      <td class="small">${p.package_workbooks.map((x) => esc(x.workbooks?.title)).join('<br>') || '—'}</td>
+      <td>${skillCount}</td><td>${p.enrollments[0]?.count ?? 0}</td><td>${p.is_active ? '<span class="badge ok">Active</span>' : '<span class="badge">Inactive</span>'}</td></tr>`;
+    }).join('') || '<tr><td colspan="5" class="muted">No packages yet.</td></tr>'}
     </tbody></table></div>`);
   $$('tr.click').forEach((tr) => (tr.onclick = () => go(`#/a/package/${tr.dataset.id}`)));
 }
 
 async function packageEditor(id) {
   const isNew = id === 'new';
-  const allWb = must(await sb.from('workbooks').select('id,title,version,is_active').order('title'));
-  let p = { code: '', name: '', description: '', validity_months: '', is_active: true }, chosen = [], comps = [];
+  const [allWb, orgsL] = await Promise.all([
+    sb.from('workbooks').select('id,title,version,is_active, learning_items(count), questions(count), competencies(id, description, position), workbook_organisations(organisation_id)').order('title').then((r) => must(r)),
+    sb.from('organisations').select('id,name').order('name').then((r) => must(r)),
+  ]);
+  let p = { code: '', name: '', description: '', validity_months: '', is_active: true }, chosen = [], comps = [], pOrgs = [];
   if (!isNew) {
     p = must(await sb.from('packages').select('*').eq('id', id).single());
     chosen = must(await sb.from('package_workbooks').select('*').eq('package_id', id).order('position')).map((x) => x.workbook_id);
     comps = must(await sb.from('competencies').select('*').eq('package_id', id).order('position'));
+    pOrgs = must(await sb.from('package_organisations').select('organisation_id').eq('package_id', id)).map((x) => x.organisation_id);
   }
   const before = new Set(chosen);
-  const wbList = allWb.filter((w) => w.is_active || chosen.includes(w.id));
+  // chosen workbooks first (in package order), then the rest of the library
+  const wbList = [...chosen.map((cid) => allWb.find((w) => w.id === cid)).filter(Boolean),
+    ...allWb.filter((w) => !chosen.includes(w.id) && w.is_active)];
+  const n = (x) => x?.[0]?.count ?? 0;
   view(`<p><a href="#/a/packages">← Packages</a></p><h1>${isNew ? 'New package' : esc(p.name)}</h1>
     <form id="pf" class="card">
       <div class="inline-fields">
@@ -484,28 +584,43 @@ async function packageEditor(id) {
       </div>
       <label>Description (shown on report)</label><textarea name="description">${esc(p.description)}</textarea>
       <label class="choice" style="max-width:260px"><input type="checkbox" name="is_active" ${p.is_active ? 'checked' : ''}>Active</label>
-      <h2>Required workbooks</h2><p class="small muted">Tick in the order learners should complete them.</p>
-      <div id="wbs">${wbList.map((w) => `<label class="choice"><input type="checkbox" value="${w.id}" ${chosen.includes(w.id) ? 'checked' : ''}>
-        ${esc(w.title)} <span class="small muted" style="margin-left:.4rem">v${esc(w.version)}${w.is_active ? '' : ' · archived'}</span></label>`).join('') || '<p class="muted">Create a workbook first.</p>'}</div>
-      <h2>Practical competency checklist</h2>
-      <p class="small muted">One skill or performance criterion per line. These appear on the practical assessment form and the report.</p>
-      <textarea name="comps" style="min-height:10rem" placeholder="Performs hand hygiene and uses PPE correctly&#10;Checks tube placement per care plan&#10;…">${esc(comps.map((c) => c.description).join('\n'))}</textarea>
+      ${orgPicker(orgsL, pOrgs)}
+      <h2>Workbooks in this package</h2>
+      <p class="small muted">Tick as many as you need. Each brings its learning material, knowledge questions and practical skills. Use ↑ ↓ to set the order learners see them.</p>
+      <div id="wbs">${wbList.map((w) => `<div class="choice row between" data-wb="${w.id}" style="flex-wrap:nowrap">
+        <label style="margin:0;font-weight:400;display:flex;align-items:center;flex:1"><input type="checkbox" value="${w.id}" ${chosen.includes(w.id) ? 'checked' : ''}>
+        <span><b>${esc(w.title)}</b> <span class="small muted">v${esc(w.version)}${w.is_active ? '' : ' · archived'}</span><br>
+        <span class="small muted">${n(w.learning_items)} learning items · ${n(w.questions)} questions · ${w.competencies.length} practical skills${w.workbook_organisations.length ? ' · limited orgs' : ''}</span></span></label>
+        <span class="nowrap"><button type="button" class="btn small secondary" data-wup aria-label="Move up">↑</button><button type="button" class="btn small secondary" data-wdown aria-label="Move down">↓</button></span></div>`).join('') || '<p class="muted">Create a workbook first.</p>'}</div>
+      <h2>Whole-package practical skills <span class="small muted">(optional)</span></h2>
+      <p class="small muted">Skills that aren't tied to one workbook, one per line.</p>
+      <textarea name="comps" style="min-height:6rem" placeholder="Communicates respectfully with the participant&#10;…">${esc(comps.map((c) => c.description).join('\n'))}</textarea>
+      <h2>Practical checklist preview</h2>
+      <div id="checklist" class="small"></div>
       <div class="sticky-actions"><button class="btn">Save package</button></div>
     </form>`);
+  wireOrgPicker();
+  const drawChecklist = () => {
+    const sel = $$('#wbs input:checked').map((x) => allWb.find((w) => w.id === x.value));
+    const extra = $('[name="comps"]').value.split('\n').map((x) => x.trim()).filter(Boolean);
+    const groups = sel.filter((w) => w.competencies.length).map((w) => `<b>${esc(w.title)}</b><ol>${[...w.competencies].sort((a, b) => a.position - b.position).map((c) => `<li>${esc(c.description)}</li>`).join('')}</ol>`);
+    if (extra.length) groups.push(`<b>Whole package</b><ol>${extra.map((c) => `<li>${esc(c)}</li>`).join('')}</ol>`);
+    $('#checklist').innerHTML = groups.join('') || '<p class="muted">No practical skills yet. Add them in each workbook (Practical skills) or above.</p>';
+  };
+  drawChecklist();
+  $('#wbs').onchange = drawChecklist; $('[name="comps"]').oninput = drawChecklist;
+  $$('[data-wup]').forEach((b) => (b.onclick = () => { const r = b.closest('[data-wb]'); r.previousElementSibling && r.parentNode.insertBefore(r, r.previousElementSibling); drawChecklist(); }));
+  $$('[data-wdown]').forEach((b) => (b.onclick = () => { const r = b.closest('[data-wb]'); r.nextElementSibling && r.parentNode.insertBefore(r.nextElementSibling, r); drawChecklist(); }));
   $('#pf').onsubmit = async (e) => {
     e.preventDefault(); const d = formData(e.target);
+    const sel = $$('#wbs input:checked').map((x) => x.value);
+    if (!sel.length && !confirm('This package has no workbooks. Save anyway?')) return;
     const rec = { code: d.code.trim().toUpperCase(), name: d.name.trim(), description: d.description, validity_months: d.validity_months ? +d.validity_months : null, is_active: !!d.is_active };
     const pid = isNew ? must(await sb.from('packages').insert(rec).select('id').single()).id : (must(await sb.from('packages').update(rec).eq('id', id)), id);
-    const sel = $$('#wbs input:checked').map((x) => x.value);
     must(await sb.from('package_workbooks').delete().eq('package_id', pid));
     if (sel.length) must(await sb.from('package_workbooks').insert(sel.map((w, i) => ({ package_id: pid, workbook_id: w, position: i + 1 }))));
-    // competencies: keep ids where the wording is unchanged so past results stay linked
-    const lines = d.comps.split('\n').map((s) => s.trim()).filter(Boolean);
-    const keep = comps.filter((c) => lines.includes(c.description));
-    const drop = comps.filter((c) => !lines.includes(c.description));
-    if (drop.length) must(await sb.from('competencies').delete().in('id', drop.map((c) => c.id)));
-    const rows = lines.map((l, i) => ({ id: keep.find((c) => c.description === l)?.id || uuid(), package_id: pid, position: i + 1, description: l }));
-    if (rows.length) must(await sb.from('competencies').upsert(rows));
+    await saveSkills(d.comps.split('\n').map((x) => x.trim()).filter(Boolean), comps, { package_id: pid });
+    await saveOrgLinks('package_organisations', 'package_id', pid, readOrgPicker());
     const added = sel.filter((w) => !before.has(w));
     if (!isNew && added.length) {
       const enrs = must(await sb.from('enrollments').select('id, learner_id').eq('package_id', pid).in('status', ['workbooks', 'ready_for_practical']));
@@ -540,37 +655,71 @@ async function orgs() {
 
 // ---------------- invites ----------------
 async function invites() {
-  const [orgsL, pkgs, rows] = await Promise.all([
+  const [orgsL, pkgs, wbs, rows] = await Promise.all([
     sb.from('organisations').select('id,name').order('name'),
-    sb.from('packages').select('id,name,code').eq('is_active', true).order('code'),
-    orgF(sb.from('invites').select('*, organisations(name), packages(name, code)').order('created_at', { ascending: false }), 'organisation_id'),
+    sb.from('packages').select('id,name,code, package_organisations(organisation_id), package_workbooks(workbook_id)').eq('is_active', true).order('code'),
+    sb.from('workbooks').select('id,title,version, workbook_organisations(organisation_id), questions(count), competencies(count)').eq('is_active', true).order('title'),
+    orgF(sb.from('invites').select('*, organisations(name), packages(name, code), invite_workbooks(workbooks(title))').order('created_at', { ascending: false }), 'organisation_id'),
   ]).then((r) => r.map((x) => must(x)));
   const joinUrl = location.origin + location.pathname + '#/join';
   const genCode = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('');
-  const message = (i) => `Hi, you've been enrolled in ${i.packages ? i.packages.name : 'training'} with ${BRAND.name}.\n\n1. Go to ${joinUrl}\n2. Enter invite code: ${i.code}${i.packages ? `\n3. Enter package plan number: ${i.packages.code}` : '\n3. Enter the package plan number you were given'}\n4. Fill in your details to create your login.\n\nAny questions, contact ${BRAND.trainerName} at ${BRAND.contactEmail}.`;
-  view(`<h1>Invite codes</h1>
+  const training = (i) => i.title || i.packages?.name || 'training';
+  const needsPlan = (i) => !i.packages && !i.invite_workbooks.length;
+  const message = (i) => `Hi, you've been enrolled in ${training(i)} with ${BRAND.name}.\n\n1. Go to ${joinUrl}\n2. Enter invite code: ${i.code}${needsPlan(i) ? '\n3. Enter the package plan number you were given' : ''}\n${needsPlan(i) ? '4' : '3'}. Fill in your details to create your login.\n\nAny questions, contact ${BRAND.trainerName} at ${BRAND.contactEmail}.`;
+  view(`<h1>Invite codes <span class="muted small">· ${esc(await orgName())}</span></h1>
     ${orgsL.length ? '' : '<div class="notice">Add an <a href="#/a/orgs">organisation</a> first.</div>'}
     <section class="card"><h2 style="margin-top:0">Create a code</h2>
-      <p class="small muted">One code can be shared with a whole group from the same organisation. Anyone who signs up with it is linked to that organisation and package automatically.</p>
-      <form id="inv" class="inline-fields">
-        <div><label>Organisation</label><select name="organisation_id" required>${opt(orgsL, state.org)}</select></div>
-        <div><label>Package</label><select name="package_id"><option value="">Learner enters plan number</option>${opt(pkgs, '', (k) => `${k.code} – ${k.name}`)}</select></div>
-        <div><label>Max uses</label><input name="max_uses" type="number" min="1" placeholder="Unlimited"></div>
-        <div><label>Expires</label><input name="expires_at" type="date"></div>
-        <div><label>Note (only you see it)</label><input name="note" placeholder="e.g. March cohort"></div>
-        <div style="align-self:end"><button class="btn">Create code</button></div>
+      <p class="small muted">Choose a package, tick individual workbooks, or both. Anyone who signs up with the code is linked to the organisation and gets exactly this training. One code can be shared with a whole group.</p>
+      <form id="inv">
+        <div class="inline-fields">
+          <div><label>Organisation</label><select name="organisation_id" id="invorg" required>${opt(orgsL, state.org)}</select></div>
+          <div><label>Package <span class="small muted">(optional)</span></label><select name="package_id" id="invpkg"></select></div>
+          <div style="grid-column:span 2"><label>Training name <span class="small muted">(shown to learners and on certificates)</span></label><input name="title" id="invtitle" placeholder="e.g. Enteral Feeding – Team B"></div>
+        </div>
+        <label>Workbooks <span class="small muted">(tick any; added on top of the package, if one is chosen)</span></label>
+        <div id="invwbs"></div>
+        <div class="inline-fields" style="margin-top:.5rem">
+          <div><label>Max uses</label><input name="max_uses" type="number" min="1" placeholder="Unlimited"></div>
+          <div><label>Expires</label><input name="expires_at" type="date"></div>
+          <div><label>Note (only you see it)</label><input name="note" placeholder="e.g. March cohort"></div>
+          <div style="align-self:end"><button class="btn">Create code</button></div>
+        </div>
       </form></section>
-    <div class="card table-wrap"><table><thead><tr><th>Code</th><th>Organisation</th><th>Package</th><th>Used</th><th>Expires</th><th></th></tr></thead><tbody>
+    <div class="card table-wrap"><table><thead><tr><th>Code</th><th>Organisation</th><th>Training</th><th>Used</th><th>Expires</th><th></th></tr></thead><tbody>
     ${rows.map((i) => `<tr><td><b style="font-family:monospace;font-size:1.05rem">${esc(i.code)}</b>${i.note ? `<div class="small muted">${esc(i.note)}</div>` : ''}</td>
-      <td>${esc(i.organisations?.name)}</td><td>${i.packages ? esc(i.packages.code) : '<span class="muted">learner enters</span>'}</td>
+      <td>${esc(i.organisations?.name)}</td>
+      <td>${i.title || i.packages ? `<b>${esc(training(i))}</b>` : ''}${i.packages ? `<div class="small">Package ${esc(i.packages.code)}</div>` : ''}
+        ${i.invite_workbooks.length ? `<div class="small muted">${i.packages ? '+ ' : ''}${i.invite_workbooks.map((x) => esc(x.workbooks?.title)).join(', ')}</div>` : ''}
+        ${needsPlan(i) ? '<span class="muted small">Learner enters plan number</span>' : ''}</td>
       <td>${i.uses}${i.max_uses ? ' / ' + i.max_uses : ''}</td><td>${fmtDate(i.expires_at)}</td>
       <td class="right nowrap">${i.is_active ? `<button class="btn small" data-copy="${i.id}">Copy message</button> <button class="btn small danger" data-off="${i.id}">Deactivate</button>` : '<span class="badge">Inactive</span>'}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">No codes yet.</td></tr>'}
     </tbody></table></div>`);
+
+  // Only offer packages / workbooks available to the chosen organisation
+  const drawChoices = () => {
+    const org = $('#invorg').value;
+    const prevPkg = $('#invpkg').value; const prevWb = new Set($$('#invwbs input:checked').map((x) => x.value));
+    const pk = pkgs.filter((k) => availableTo(k.package_organisations, org));
+    $('#invpkg').innerHTML = `<option value="">No package</option>${opt(pk, prevPkg, (k) => `${k.code} – ${k.name}`)}`;
+    const inPkg = new Set(pkgs.find((k) => k.id === $('#invpkg').value)?.package_workbooks.map((x) => x.workbook_id) || []);
+    const wl = wbs.filter((w) => availableTo(w.workbook_organisations, org));
+    $('#invwbs').innerHTML = wl.map((w) => `<label class="choice"><input type="checkbox" value="${w.id}" ${prevWb.has(w.id) && !inPkg.has(w.id) ? 'checked' : ''} ${inPkg.has(w.id) ? 'disabled checked' : ''}>
+      <span>${esc(w.title)} <span class="small muted">v${esc(w.version)} · ${w.questions[0]?.count ?? 0} questions · ${w.competencies[0]?.count ?? 0} practical skills${inPkg.has(w.id) ? ' · in package' : ''}</span></span></label>`).join('')
+      || '<p class="muted small">No workbooks available to this organisation.</p>';
+  };
+  drawChoices();
+  $('#invorg').onchange = drawChoices; $('#invpkg').onchange = drawChoices;
+
   $('#inv').onsubmit = async (e) => {
     e.preventDefault(); const d = formData(e.target);
-    const rec = { code: genCode(), organisation_id: d.organisation_id, package_id: d.package_id || null, max_uses: d.max_uses ? +d.max_uses : null,
-      expires_at: d.expires_at ? new Date(d.expires_at + 'T23:59:59').toISOString() : null, note: d.note || null };
-    must(await sb.from('invites').insert(rec)); toast(`Code ${rec.code} created`); invites();
+    const picked = $$('#invwbs input:checked:not(:disabled)').map((x) => x.value);
+    if (!d.package_id && picked.length && !d.title.trim()) return toast('Give this training a name. It appears on the learner\'s dashboard and certificate.', true);
+    if (!d.package_id && !picked.length && !confirm('No package or workbooks chosen. Learners will have to type a package plan number when they sign up. Continue?')) return;
+    const rec = { code: genCode(), organisation_id: d.organisation_id, package_id: d.package_id || null, title: d.title.trim() || null,
+      max_uses: d.max_uses ? +d.max_uses : null, expires_at: d.expires_at ? new Date(d.expires_at + 'T23:59:59').toISOString() : null, note: d.note || null };
+    const inv = must(await sb.from('invites').insert(rec).select('id').single());
+    if (picked.length) must(await sb.from('invite_workbooks').insert(picked.map((w, i) => ({ invite_id: inv.id, workbook_id: w, position: i + 1 }))));
+    toast(`Code ${rec.code} created`); invites();
   };
   $$('[data-copy]').forEach((b) => (b.onclick = async () => {
     const text = message(rows.find((r) => r.id === b.dataset.copy));
@@ -586,7 +735,7 @@ async function invites() {
 // ---------------- practical assessment ----------------
 async function practical(enrId, pid) {
   const e = must(await sb.from('enrollments').select('*, profiles(full_name, id), packages(name)').eq('id', enrId).single());
-  const comps = must(await sb.from('competencies').select('*').eq('package_id', e.package_id).order('position'));
+  const comps = must(await sb.rpc('enrollment_competencies', { p_enr: enrId }));
   let p = { assessed_on: new Date().toISOString().slice(0, 10), location: '', notes: '', outcome: 'draft', assessor_name: BRAND.trainerName }, res = {};
   if (pid !== 'new') {
     p = must(await sb.from('practical_assessments').select('*').eq('id', pid).single());
@@ -595,7 +744,7 @@ async function practical(enrId, pid) {
   const signed = !!p.signed_off_at;
   const R = [['competent', 'Competent'], ['not_yet', 'Not yet competent'], ['not_applicable', 'N/A'], ['not_assessed', 'Not assessed']];
   view(`<p><a href="#/a/learner/${e.profiles.id}">← ${esc(e.profiles.full_name)}</a></p>
-    <h1>Practical assessment</h1><p class="muted">${esc(e.profiles.full_name)} · ${esc(e.packages.name)}</p>
+    <h1>Practical assessment</h1><p class="muted">${esc(e.profiles.full_name)} · ${esc(tName(e))}</p>
     ${e.status === 'workbooks' ? '<div class="notice">Heads up: this learner still has workbooks outstanding.</div>' : ''}
     ${signed ? `<div class="notice info">Signed off ${fmtDate(p.signed_off_at)}. You can still correct it.</div>` : ''}
     <form id="pf" class="card">
@@ -605,10 +754,10 @@ async function practical(enrId, pid) {
         <div><label>Assessor</label><input name="assessor_name" value="${esc(p.assessor_name)}"></div>
       </div>
       <h2>Competency checklist</h2>
-      ${comps.length ? comps.map((c, i) => `<div class="question"><b>${i + 1}. ${esc(c.description)}</b>
+      ${comps.length ? comps.map((c, i) => `${i === 0 || comps[i - 1].group_title !== c.group_title ? `<h3>${esc(c.group_title)}</h3>` : ''}<div class="question"><b>${i + 1}. ${esc(c.description)}</b>
         <div class="row" style="margin-top:.3rem">${R.map(([v, l]) => `<label class="choice" style="margin:0"><input type="radio" name="r_${c.id}" value="${v}" ${(res[c.id]?.result || 'not_assessed') === v ? 'checked' : ''}>${l}</label>`).join('')}</div>
         <input name="n_${c.id}" placeholder="Observation notes" value="${esc(res[c.id]?.notes)}" style="margin-top:.4rem"></div>`).join('')
-        : `<div class="notice">This package has no competencies yet. <a href="#/a/package/${e.package_id}">Add them to the package</a>.</div>`}
+        : `<div class="notice">No practical skills apply yet. Add them under <b>Practical skills</b> in each workbook${e.package_id ? `, or to the <a href="#/a/package/${e.package_id}">package</a>` : ''}.</div>`}
       <label for="notes">Assessor notes</label><textarea id="notes" name="notes">${esc(p.notes)}</textarea>
       <div class="sticky-actions row"><button class="btn secondary" value="draft">Save draft</button>
         <button class="btn ok" value="competent">Sign off: Competent</button>

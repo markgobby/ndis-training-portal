@@ -30,12 +30,30 @@ async function learn(id) {
   view(`<p><a href="#/">← Back</a></p>
     <div class="card"><h1 style="margin:0 0 .3rem">${esc(a.workbooks.title)}</h1>
       ${partTabs(id, 'learn', true)}
-      <div class="notice info small">Read through the material below. The "Check your understanding" questions are just for practice. Your answers to them aren't saved or marked.</div>
+      <div class="notice info small">Read through the material below and answer each "Check your understanding" question. They're just for practice, and your answers aren't saved or marked. When you reach the end, confirm you've read everything to unlock Part 2.</div>
       ${html || '<p class="muted">No learning material for this workbook.</p>'}
-      <div class="sticky-actions row">
-        ${a.learning_done_at ? `<span class="small muted">You finished the learning material on ${fmtDate(a.learning_done_at)}.</span><a class="btn" href="#/wb/${id}/assess">Go to knowledge assessment →</a>`
-          : `<button class="btn" id="done">I've read the learning material – start the knowledge assessment →</button>`}
-      </div></div>`);
+      <section class="ack">
+        ${a.learning_done_at ? `<p class="small muted">You finished the learning material on ${fmtDate(a.learning_done_at)}.</p><a class="btn" href="#/wb/${id}/assess">Go to knowledge assessment →</a>`
+          : `<h2 style="margin-top:0">Before you continue</h2>
+          <p id="ackprogress" class="small"></p>
+          <label class="choice"><input type="checkbox" id="ackbox" disabled>I have read and understood the learning material in Part 1.</label>
+          <button class="btn block" id="done" disabled>Start the knowledge assessment →</button>`}
+      </section></div>`);
+  // The acknowledgement unlocks only once every practice question has been answered
+  const practiceIds = items.filter((x) => x.kind === 'practice').map((x) => x.id);
+  const answered = new Set();
+  const refreshAck = () => {
+    if (!$('#done')) return;
+    const left = practiceIds.length - answered.size;
+    $('#ackprogress').innerHTML = left > 0
+      ? `Answer all the "Check your understanding" questions to continue: <b>${answered.size} of ${practiceIds.length}</b> done.`
+      : practiceIds.length ? '✓ All practice questions answered.' : '';
+    $('#ackbox').disabled = left > 0;
+    if (left > 0) $('#ackbox').checked = false;
+    $('#done').disabled = left > 0 || !$('#ackbox').checked;
+  };
+  refreshAck();
+  $('#ackbox') && ($('#ackbox').onchange = refreshAck);
   $$('[data-check]').forEach((b) => (b.onclick = () => {
     const it = items.find((x) => x.id === b.dataset.check);
     const box = b.parentElement.querySelector('.pfb');
@@ -44,6 +62,7 @@ async function learn(id) {
     const right = (it.answer || '').trim().toLowerCase() === pick.value.trim().toLowerCase();
     box.innerHTML = `<div class="notice ${right ? 'info' : 'bad'} small"><b>${right ? 'Correct.' : 'Not quite.'}</b>
       ${right ? '' : `The answer is <b>${esc(it.answer)}</b>.`} ${it.explanation ? esc(it.explanation) : ''}</div>`;
+    answered.add(it.id); refreshAck();
   }));
   $('#done') && ($('#done').onclick = async () => {
     must(await sb.rpc('mark_learning_done', { p_assignment: id }), 'Could not continue');
@@ -87,7 +106,7 @@ async function dashboard() {
     if (e.status === 'practical_complete') next = 'Practical complete. Your trainer is finalising your certificate.';
     if (e.status === 'completed') next = 'Congratulations, you have completed this training.';
     return `<section class="card">
-      <div class="row between"><h2 style="margin:0">${esc(e.packages.name)}</h2>${badge(e.status)}</div>
+      <div class="row between"><h2 style="margin:0">${esc(e.title || e.packages?.name || 'Training')}</h2>${badge(e.status)}</div>
       ${stageSteps(e.status)}
       <p>${next}</p>
       ${e.status === 'completed' ? `<div class="row"><a class="btn" href="#/doc/cert/${e.id}">View certificate</a><a class="btn secondary" href="#/doc/report/${e.id}">Training report</a></div>` : ''}
