@@ -19,7 +19,7 @@ NDIS High Intensity Supports training portal. One trainer/assessor (the admin) r
 - `feedback` (one per assignment or per practical)
 
 ## Key logic (in SQL)
-- `handle_new_user` trigger on `auth.users`: reads `invite_code`, `package_code`, `full_name`, `dob` and `phone` from the sign-up metadata, creates the profile, and calls `enroll_learner`. A bad code makes the sign-up fail.
+- `handle_new_user` trigger on `auth.users`: reads `invite_code`, `package_code`, `full_name` and `phone` (`dob` is optional; the sign-up form no longer asks for it, the admin can add it on the learner page) from the sign-up metadata, creates the profile, and calls `enroll_learner`. A bad code makes the sign-up fail.
 - `check_invite` (callable by anon) validates a code before sign-up.
 - `save_answers` and `submit_assignment`: the learner's only write path. Submitting auto-marks multiple-choice and true/false questions.
 - `finalise_review` (admin): sets competent or resubmit and calculates the score.

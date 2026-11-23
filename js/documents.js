@@ -47,7 +47,7 @@ function report(e, asg, pracs, comps, back) {
     <h2>Participant</h2>
     <div class="kv">
       <div>Name</div><div><b>${esc(e.profiles.full_name)}</b></div>
-      <div>Date of birth</div><div>${fmtDate(e.profiles.dob)}</div>
+      ${e.profiles.dob ? `<div>Date of birth</div><div>${fmtDate(e.profiles.dob)}</div>` : ''}
       <div>Organisation</div><div>${esc(e.organisations?.name || '—')}</div>
       <div>Training package</div><div>${esc(e.packages.name)} (${esc(e.packages.code)})</div>
       <div>Enrolled</div><div>${fmtDate(e.started_at)}</div>

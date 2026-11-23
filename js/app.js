@@ -131,7 +131,6 @@ function joinView() {
     $('#step2').innerHTML = `<div class="notice info">Organisation: <b>${esc(r.organisation_name)}</b><br>Training: <b>${esc(r.package_name)}</b></div>
       <form id="f2">
         <label for="fn">Full name (as it should appear on your certificate)</label><input id="fn" name="full_name" autocomplete="name" required>
-        <label for="dob">Date of birth</label><input id="dob" name="dob" type="date" required max="${new Date().toISOString().slice(0, 10)}">
         <label for="ph">Mobile (optional)</label><input id="ph" name="phone" type="tel" autocomplete="tel">
         <label for="em">Email</label><input id="em" name="email" type="email" autocomplete="email" required>
         <label for="pw">Create a password (at least 8 characters)</label><input id="pw" name="password" type="password" minlength="8" autocomplete="new-password" required>
@@ -144,7 +143,7 @@ function joinView() {
         email: p.email.trim(), password: p.password,
         options: {
           emailRedirectTo: location.origin + location.pathname,
-          data: { invite_code: d.code.trim(), package_code: (d.pkg || '').trim(), full_name: p.full_name.trim(), dob: p.dob, phone: p.phone.trim() },
+          data: { invite_code: d.code.trim(), package_code: (d.pkg || '').trim(), full_name: p.full_name.trim(), phone: p.phone.trim() },
         },
       });
       btn.disabled = false;
