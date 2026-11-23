@@ -65,7 +65,7 @@ This is needed for the email-confirmation and password-reset links to work.
 2. **Workbooks**: build each workbook in the app, or import its questions from a CSV (see below). Question types are short answer, long answer, multiple choice and true/false. Multiple-choice and true/false questions are marked automatically. You mark written answers as *Satisfactory* or *Not satisfactory*, and can comment on each one.
 3. **Packages**: a package plan number (e.g. `HIS-PEG-01`) bundles the required workbooks and the practical competency checklist. You can also set an optional certificate validity in months.
 4. **Invite codes**: create a code for an organisation, optionally tied to a package. Press **Copy message** and paste it into an email or SMS. One code can serve a whole group. You can limit how many times it's used and set an expiry date.
-5. **Learners sign up**: they enter the code, then their name, DOB, email and password. Their account is linked to the organisation, and the package's workbooks are assigned automatically. You don't create accounts yourself.
+5. **Learners sign up**: they enter the code, then their name, email and password. Their account is linked to the organisation, and the package's workbooks are assigned automatically. You don't create accounts yourself.
 6. **Review**: submitted workbooks appear on the dashboard and in **Review**. Mark each one competent, or return it for resubmission with comments.
 7. When every workbook is competent, the learner moves to **Ready for practical**.
 8. **Practical**: open the learner and choose **Record practical assessment**. Tick each competency, add notes, then sign off. You can save a draft partway through.
@@ -93,7 +93,7 @@ You can download a ready-made template from the workbook editor.
 ## Good to know
 - **Email limits**: Supabase's built-in email only sends a handful of messages per hour. Before going live, set up your own SMTP sender under **Authentication → Emails → SMTP Settings**. Brevo, Resend or Google Workspace all work.
 - **Free plan**: free projects pause after about a week with no activity and don't include daily backups. For a live service holding client data, the Pro plan (about US$25/month) avoids both. You can also export data from **Database → Backups** or the Table Editor.
-- **Privacy**: the app stores names, dates of birth and training records. Keep the project in the Sydney region, keep the GitHub repo private, and cover this in your privacy policy.
+- **Privacy**: the app stores names, contact details and training records (plus date of birth if you add it on the learner page). Keep the project in the Sydney region, keep the GitHub repo private, and cover this in your privacy policy.
 - **Security**: learners can only ever see their own records. Correct answers live in a table learners can't read. Only accounts with `role = 'admin'` can see across organisations.
 
 ## Files
