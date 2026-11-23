@@ -1,5 +1,6 @@
 import { sb, state, $, $$, esc, fmtDate, view, go, toast, must, formData, badge, stageSteps, ratingInput, formatText } from './app.js';
 
+const tName = (e) => e.title || e.packages?.name || 'Training';
 const partTabs = (id, active, hasLearning) => hasLearning ? `<div class="parts" role="tablist">
   <a role="tab" href="#/wb/${id}/learn" class="${active === 'learn' ? 'on' : ''}" aria-selected="${active === 'learn'}">Part 1 · Learning</a>
   <a role="tab" href="#/wb/${id}/assess" class="${active === 'assess' ? 'on' : ''}" aria-selected="${active === 'assess'}">Part 2 · Knowledge assessment</a></div>` : '';
@@ -84,7 +85,7 @@ async function dashboard() {
   const [enrs, asg, prac, fb] = await Promise.all([
     sb.from('enrollments').select('*, packages(name, code)').eq('learner_id', uid).order('started_at'),
     sb.from('assignments').select('*, workbooks(title, description, version)').eq('learner_id', uid),
-    sb.from('practical_assessments').select('*').order('assessed_on'),
+    sb.from('practical_assessments').select('*, practical_results(*)').order('assessed_on'),
     sb.from('feedback').select('assignment_id, practical_id').eq('learner_id', uid),
   ]).then((r) => r.map((x) => must(x)));
 
@@ -96,6 +97,10 @@ async function dashboard() {
       .map((p) => `<li><a href="#/fb/p/${p.id}">Feedback on practical training (${fmtDate(p.assessed_on)})</a></li>`),
   ];
 
+  const checklists = Object.fromEntries(await Promise.all(enrs.map(async (e) =>
+    [e.id, (await sb.rpc('enrollment_competencies', { p_enr: e.id })).data || []])));
+  const RES = { competent: ['✓', 'Competent', 'ok'], not_yet: ['✗', 'Not yet competent', 'bad'], not_applicable: ['–', 'Not applicable', ''], not_assessed: ['○', 'Not assessed', ''] };
+
   const blocks = enrs.map((e) => {
     const mine = asg.filter((a) => a.enrollment_id === e.id).sort((a, b) => a.workbooks.title.localeCompare(b.workbooks.title));
     const done = mine.filter((a) => a.status === 'competent').length;
@@ -105,26 +110,69 @@ async function dashboard() {
     if (e.status === 'ready_for_practical') next = 'All workbooks are complete. Your trainer will contact you to book your practical training.';
     if (e.status === 'practical_complete') next = 'Practical complete. Your trainer is finalising your certificate.';
     if (e.status === 'completed') next = 'Congratulations, you have completed this training.';
-    return `<section class="card">
-      <div class="row between"><h2 style="margin:0">${esc(e.title || e.packages?.name || 'Training')}</h2>${badge(e.status)}</div>
-      ${stageSteps(e.status)}
-      <p>${next}</p>
-      ${e.status === 'completed' ? `<div class="row"><a class="btn" href="#/doc/cert/${e.id}">View certificate</a><a class="btn secondary" href="#/doc/report/${e.id}">Training report</a></div>` : ''}
-      <h3>Workbooks</h3>
-      ${mine.length ? `<div class="table-wrap"><table><thead><tr><th>Workbook</th><th>Status</th><th></th></tr></thead><tbody>
+    const comps = checklists[e.id];
+    const signed = pr.filter((p) => p.outcome !== 'draft');
+    const last = signed.at(-1);
+    const resBy = Object.fromEntries((last?.practical_results || []).map((r) => [r.competency_id, r]));
+    const fbDone = mine.filter((a) => given.has(a.id)).length + signed.filter((p) => given.has(p.id)).length;
+    const fbTotal = mine.filter((a) => ['submitted', 'competent'].includes(a.status)).length + signed.length;
+    const tab = (k, label) => `<button type="button" role="tab" data-tab="${k}" data-e="${e.id}" class="${k === 'wb' ? 'on' : ''}">${label}</button>`;
+
+    const wbPanel = mine.length ? `<div class="table-wrap"><table><thead><tr><th>Workbook</th><th>Status</th><th></th></tr></thead><tbody>
         ${mine.map((a) => `<tr><td>${esc(a.workbooks.title)}<div class="small muted">${esc(a.workbooks.description || '')}</div>
           ${a.status === 'resubmit' && a.reviewer_notes ? `<div class="notice small">Trainer: ${esc(a.reviewer_notes)}</div>` : ''}</td>
           <td>${badge(a.status)}</td>
           <td class="right"><a class="btn small ${['submitted', 'competent'].includes(a.status) ? 'secondary' : ''}" href="#/wb/${a.id}">
             ${{ not_started: 'Start', in_progress: 'Continue', resubmit: 'Fix & resubmit' }[a.status] || 'View'}</a></td></tr>`).join('')}
-      </tbody></table></div>` : '<p class="muted">No workbooks assigned yet.</p>'}
-      ${pr.filter((p) => p.outcome !== 'draft').map((p) => `<p>Practical on ${fmtDate(p.assessed_on)}: ${badge(p.outcome)}</p>`).join('')}
+      </tbody></table></div>` : '<p class="muted">No workbooks assigned yet.</p>';
+
+    let group = null;
+    const pracPanel = `<p class="small">${last ? `Assessed on <b>${fmtDate(last.assessed_on)}</b>${last.location ? ` at ${esc(last.location)}` : ''} by ${esc(last.assessor_name || 'your trainer')}: ${badge(last.outcome)}`
+        : 'Once your workbooks are complete, your trainer will watch you carry out each of these in a practical session and tick them off.'}</p>
+      ${comps.length ? `<ul class="checklist">${comps.map((c) => {
+        const r = resBy[c.id]; const [sym, label, cls] = RES[r?.result] || ['○', 'To be observed', ''];
+        const head = c.group_title !== group ? `</ul><h3 class="small" style="margin:.8rem 0 .2rem">${esc(c.group_title)}</h3><ul class="checklist">` : '';
+        group = c.group_title;
+        return `${head}<li><span class="tick ${cls}" aria-label="${label}">${sym}</span><span>${esc(c.description)}
+          ${r ? `<span class="badge ${cls}" style="margin-left:.3rem">${label}</span>` : ''}${r?.notes ? `<div class="small muted">Trainer note: ${esc(r.notes)}</div>` : ''}</span></li>`;
+      }).join('')}</ul>` : '<p class="muted small">Your trainer hasn\'t added the practical checklist yet.</p>'}
+      ${last?.notes ? `<div class="notice info small">Assessor notes: ${esc(last.notes)}</div>` : ''}`;
+
+    const reviewPanel = `<h3 style="margin-top:.3rem">Workbook results</h3>
+      ${mine.length ? `<ul class="checklist">${mine.map((a) => `<li><span class="tick ${a.status === 'competent' ? 'ok' : a.status === 'resubmit' ? 'bad' : ''}">${a.status === 'competent' ? '✓' : a.status === 'resubmit' ? '!' : '○'}</span>
+        <span>${esc(a.workbooks.title)} ${badge(a.status)}${a.score != null ? ` <span class="small muted">${a.score}%</span>` : ''}
+        ${a.reviewer_notes ? `<div class="small muted">Trainer: ${esc(a.reviewer_notes)}</div>` : ''}</span></li>`).join('')}</ul>` : '<p class="muted small">No workbooks yet.</p>'}
+      <h3>Practical</h3><p class="small">${last ? `${badge(last.outcome)} on ${fmtDate(last.assessed_on)}` : 'Not assessed yet.'}</p>
+      <h3>Your feedback</h3><p class="small">${fbTotal ? `${fbDone} of ${fbTotal} feedback forms done.` : 'You\'ll be asked for quick feedback after each workbook and after your practical.'}</p>
+      ${e.trainer_comments && e.status === 'completed' ? `<div class="notice info small">Trainer comments: ${esc(e.trainer_comments)}</div>` : ''}
+      <a class="btn secondary" href="#/doc/report/${e.id}">${e.status === 'completed' ? 'Open training report' : 'Preview training report'}</a>
+      ${e.status === 'completed' ? '' : '<p class="small muted">This is the report your trainer gives you and your organisation when you finish. It fills in as you go.</p>'}`;
+
+    const certPanel = e.status === 'completed'
+      ? `<p>Your certificate <b>${esc(e.certificate_number)}</b> was issued on ${fmtDate(e.completed_at)}${e.expires_at ? `. Refresher due ${fmtDate(e.expires_at)}` : ''}.</p>
+         <a class="btn" href="#/doc/cert/${e.id}">View &amp; download certificate</a>`
+      : `<p class="small">When you've completed your workbooks and practical assessment and your trainer signs you off, your certificate appears here, ready to download or print.</p>
+         <a class="btn secondary" href="#/doc/cert/${e.id}">Preview sample certificate</a>`;
+
+    return `<section class="card">
+      <div class="row between"><h2 style="margin:0">${esc(tName(e))}</h2>${badge(e.status)}</div>
+      ${stageSteps(e.status)}
+      <p>${next}</p>
+      <div class="tabs" role="tablist">${tab('wb', 'Workbooks')}${tab('prac', 'Practical')}${tab('rev', 'Review')}${tab('cert', 'Certificate')}</div>
+      <div class="tabpanel" data-panel="wb" data-e="${e.id}">${wbPanel}</div>
+      <div class="tabpanel" data-panel="prac" data-e="${e.id}" hidden>${pracPanel}</div>
+      <div class="tabpanel" data-panel="rev" data-e="${e.id}" hidden>${reviewPanel}</div>
+      <div class="tabpanel" data-panel="cert" data-e="${e.id}" hidden>${certPanel}</div>
     </section>`;
   }).join('');
 
   view(`<h1>Welcome, ${esc(state.profile.full_name?.split(' ')[0] || '')}</h1>
     ${pending.length ? `<div class="notice"><b>Please give feedback:</b><ul style="margin:.3rem 0 0">${pending.join('')}</ul></div>` : ''}
     ${blocks || '<div class="card">You are not enrolled in any training yet.</div>'}`);
+  $$('[data-tab]').forEach((b) => (b.onclick = () => {
+    $$(`[data-tab][data-e="${b.dataset.e}"]`).forEach((x) => x.classList.toggle('on', x === b));
+    $$(`[data-panel][data-e="${b.dataset.e}"]`).forEach((p) => (p.hidden = p.dataset.panel !== b.dataset.tab));
+  }));
 }
 
 async function workbook(id) {

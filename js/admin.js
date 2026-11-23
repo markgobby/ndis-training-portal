@@ -742,7 +742,7 @@ async function practical(enrId, pid) {
     res = Object.fromEntries(must(await sb.from('practical_results').select('*').eq('practical_id', pid)).map((r) => [r.competency_id, r]));
   }
   const signed = !!p.signed_off_at;
-  const R = [['competent', 'Competent'], ['not_yet', 'Not yet competent'], ['not_applicable', 'N/A'], ['not_assessed', 'Not assessed']];
+  const R = [['competent', '✓ Competent', 'ok'], ['not_yet', '✗ Not yet', 'bad'], ['not_applicable', 'N/A', ''], ['not_assessed', 'Not seen', '']];
   view(`<p><a href="#/a/learner/${e.profiles.id}">← ${esc(e.profiles.full_name)}</a></p>
     <h1>Practical assessment</h1><p class="muted">${esc(e.profiles.full_name)} · ${esc(tName(e))}</p>
     ${e.status === 'workbooks' ? '<div class="notice">Heads up: this learner still has workbooks outstanding.</div>' : ''}
@@ -753,18 +753,27 @@ async function practical(enrId, pid) {
         <div><label>Location</label><input name="location" value="${esc(p.location)}" placeholder="e.g. participant's home, simulation lab"></div>
         <div><label>Assessor</label><input name="assessor_name" value="${esc(p.assessor_name)}"></div>
       </div>
-      <h2>Competency checklist</h2>
-      ${comps.length ? comps.map((c, i) => `${i === 0 || comps[i - 1].group_title !== c.group_title ? `<h3>${esc(c.group_title)}</h3>` : ''}<div class="question"><b>${i + 1}. ${esc(c.description)}</b>
-        <div class="row" style="margin-top:.3rem">${R.map(([v, l]) => `<label class="choice" style="margin:0"><input type="radio" name="r_${c.id}" value="${v}" ${(res[c.id]?.result || 'not_assessed') === v ? 'checked' : ''}>${l}</label>`).join('')}</div>
-        <input name="n_${c.id}" placeholder="Observation notes" value="${esc(res[c.id]?.notes)}" style="margin-top:.4rem"></div>`).join('')
+      <div class="row between"><h2>Observation checklist</h2><button type="button" class="btn small secondary" id="allok">Mark all competent</button></div>
+      <p class="small muted">Tap a result for each skill you observe. Tick "Add notes" only where you want to record something.</p>
+      ${comps.length ? comps.map((c, i) => `${i === 0 || comps[i - 1].group_title !== c.group_title ? `<h3>${esc(c.group_title)}</h3>` : ''}<div class="obs">
+        <div class="obs-q">${i + 1}. ${esc(c.description)}</div>
+        <div class="seg" role="radiogroup" aria-label="Result for item ${i + 1}">${R.map(([v, l, cls]) => `<label class="${cls}"><input type="radio" name="r_${c.id}" value="${v}" ${(res[c.id]?.result || 'not_assessed') === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div>
+        <label class="notetoggle"><input type="checkbox" data-note="${c.id}" ${res[c.id]?.notes ? 'checked' : ''}>Add notes</label>
+        <textarea name="n_${c.id}" class="obsnote" placeholder="What did you observe?" ${res[c.id]?.notes ? '' : 'hidden'}>${esc(res[c.id]?.notes)}</textarea></div>`).join('')
         : `<div class="notice">No practical skills apply yet. Add them under <b>Practical skills</b> in each workbook${e.package_id ? `, or to the <a href="#/a/package/${e.package_id}">package</a>` : ''}.</div>`}
       <label for="notes">Assessor notes</label><textarea id="notes" name="notes">${esc(p.notes)}</textarea>
       <div class="sticky-actions row"><button class="btn secondary" value="draft">Save draft</button>
         <button class="btn ok" value="competent">Sign off: Competent</button>
         <button class="btn danger" value="not_yet_competent">Sign off: Not yet competent</button></div>
     </form>`);
+  $$('[data-note]').forEach((cb) => (cb.onchange = () => {
+    const box = $(`[name="n_${cb.dataset.note}"]`); box.hidden = !cb.checked; if (cb.checked) box.focus();
+  }));
+  $('#allok') && ($('#allok').onclick = () => $$('.seg input[value="competent"]').forEach((r) => (r.checked = true)));
   $('#pf').onsubmit = async (ev) => {
     ev.preventDefault(); const outcome = ev.submitter?.value || 'draft'; const d = formData(ev.target);
+    // notes only count where "Add notes" is ticked
+    comps.forEach((c) => { if (!$(`[data-note="${c.id}"]`).checked) d[`n_${c.id}`] = ''; });
     if (outcome === 'competent') {
       const notOk = comps.filter((c) => !['competent', 'not_applicable'].includes(d[`r_${c.id}`]));
       if (notOk.length && !confirm(`${notOk.length} item(s) aren't marked competent. Sign off as competent anyway?`)) return;

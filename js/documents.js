@@ -40,7 +40,8 @@ function report(e, asg, pracs, comps, back) {
   const last = pracs.at(-1);
   const resMap = Object.fromEntries((last?.practical_results || []).map((r) => [r.competency_id, r]));
   view(`${toolbar(back)}
-  <article class="doc">
+  ${e.status !== 'completed' ? '<div class="notice no-print">Training is still in progress, so this report shows results so far. The final version is issued with the certificate.</div>' : ''}
+  <article class="doc" style="position:relative">${e.status !== 'completed' ? '<div class="sample-mark" style="font-size:3.5rem">IN PROGRESS</div>' : ''}
     <header><div><div class="small muted">${esc(BRAND.name)}</div><h1 style="margin:.2rem 0 0">Post-Training Report</h1>
       <div class="muted">${esc(BRAND.tagline)}</div></div>${logo()}</header>
 
@@ -93,9 +94,11 @@ function report(e, asg, pracs, comps, back) {
 
 function certificate(e, back) {
   pageSize(true);
-  if (e.status !== 'completed') return view(`${toolbar(back)}<div class="card">The certificate is available once training is completed and issued.</div>`);
+  const sample = e.status !== 'completed';
+  const months = e.packages?.validity_months;
   view(`${toolbar(back)}
-  <article class="cert"><div class="frame">
+  ${sample ? '<div class="notice no-print">This is a <b>sample</b> of the certificate you\'ll receive. The date and certificate number are filled in when your trainer signs you off.</div>' : ''}
+  <article class="cert">${sample ? '<div class="sample-mark">SAMPLE</div>' : ''}<div class="frame">
     ${logo()}
     <div class="eyebrow">${esc(BRAND.name)}</div>
     <h1>Certificate of Completion</h1>
@@ -107,8 +110,9 @@ function certificate(e, back) {
     ${e.organisations?.name ? `<div class="small muted" style="margin-top:.4rem">${esc(e.organisations.name)}</div>` : ''}
     <div class="meta">
       <div>${esc(BRAND.trainerName)}<br><span class="small">${esc(BRAND.trainerTitle)}</span></div>
-      <div>Date of completion<br><b>${fmtDate(e.completed_at)}</b></div>
-      <div>Certificate no.<br><b>${esc(e.certificate_number)}</b>${e.expires_at ? `<br><span class="small">Refresher due ${fmtDate(e.expires_at)}</span>` : ''}</div>
+      <div>Date of completion<br><b>${sample ? 'On completion' : fmtDate(e.completed_at)}</b></div>
+      <div>Certificate no.<br><b>${sample ? 'HIS-YYYY-####' : esc(e.certificate_number)}</b>${!sample && e.expires_at ? `<br><span class="small">Refresher due ${fmtDate(e.expires_at)}</span>`
+        : sample && months ? `<br><span class="small">Valid for ${months} months</span>` : ''}</div>
     </div>
   </div></article>`);
 }

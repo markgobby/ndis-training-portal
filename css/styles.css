@@ -136,3 +136,27 @@ tr.click { cursor: pointer; } tr.click:hover { background: var(--brand-soft); }
 }
 .ack { margin-top: 2rem; padding: 1rem 1.1rem; border: 2px solid var(--brand-soft); border-radius: var(--radius); background: #fbfdfd; }
 .guestbar { background: var(--warn-soft); color: #5a3a00; text-align: center; font-size: .85rem; padding: .35rem 1rem; }
+.tabs { display: flex; gap: .25rem; border-bottom: 2px solid var(--line); margin: .5rem 0 1rem; overflow-x: auto; }
+.tabs button { background: none; border: 0; font: inherit; font-weight: 600; color: var(--muted); padding: .5rem .8rem; border-bottom: 3px solid transparent; margin-bottom: -2px; cursor: pointer; white-space: nowrap; }
+.tabs button.on { color: var(--brand); border-bottom-color: var(--brand); }
+.checklist { list-style: none; padding: 0; margin: .3rem 0; }
+.checklist li { display: flex; gap: .6rem; align-items: flex-start; padding: .45rem 0; border-bottom: 1px solid var(--line); }
+.tick { flex: none; width: 1.6rem; height: 1.6rem; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: #eceff1; color: var(--muted); font-weight: 700; }
+.tick.ok { background: var(--ok-soft); color: var(--ok); } .tick.bad { background: var(--bad-soft); color: var(--bad); }
+.sample-mark { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; font-size: 5rem; font-weight: 800; color: rgba(179,38,30,.13); transform: rotate(-18deg); letter-spacing: .1em; }
+.cert { position: relative; }
+.obs { border-bottom: 1px solid var(--line); padding: .7rem 0; }
+.obs-q { font-weight: 600; margin-bottom: .4rem; }
+.seg { display: inline-flex; flex-wrap: wrap; gap: .3rem; }
+.seg label { margin: 0; font-weight: 600; font-size: .85rem; }
+.seg input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.seg span { display: inline-block; padding: .35rem .7rem; border: 1px solid var(--line); border-radius: 999px; background: #fff; color: var(--muted); cursor: pointer; }
+.seg input:focus-visible + span { outline: 3px solid #7cc4cb; }
+.seg input:checked + span { background: #37474f; border-color: #37474f; color: #fff; }
+.seg label.ok input:checked + span { background: var(--ok); border-color: var(--ok); }
+.seg label.bad input:checked + span { background: var(--bad); border-color: var(--bad); }
+.notetoggle { display: inline-flex; align-items: center; font-weight: 400; font-size: .85rem; margin: .3rem 0 0 .6rem; color: var(--muted); }
+.obsnote { min-height: 3.2rem; margin-top: .4rem; }
+.tabs button { flex: 1; padding: .5rem .3rem; font-size: .9rem; }
+.cert, .doc { overflow: hidden; }
+@media (max-width: 640px) { .sample-mark { font-size: 3rem !important; } }
