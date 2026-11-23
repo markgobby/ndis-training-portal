@@ -160,3 +160,11 @@ tr.click { cursor: pointer; } tr.click:hover { background: var(--brand-soft); }
 .tabs button { flex: 1; padding: .5rem .3rem; font-size: .9rem; }
 .cert, .doc { overflow: hidden; }
 @media (max-width: 640px) { .sample-mark { font-size: 3rem !important; } }
+/* progress steps used as tabs on the learner dashboard */
+html, body { overflow-x: hidden; }
+.steptabs button { flex: 1; font: inherit; font-size: .8rem; font-weight: 600; padding: .45rem .2rem; border-radius: 6px; border: 2px solid transparent;
+  background: #eceff1; color: var(--muted); cursor: pointer; }
+.steptabs button.done { background: var(--ok); color: #fff; }
+.steptabs button.current { background: var(--brand); color: #fff; }
+.steptabs button.on { border-color: var(--ink); box-shadow: 0 2px 0 var(--ink); }
+.steptabs button:not(.done):not(.current).on { background: #fff; color: var(--ink); }

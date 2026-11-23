@@ -1,4 +1,4 @@
-import { sb, state, $, $$, esc, fmtDate, view, go, toast, must, formData, badge, stageSteps, ratingInput, formatText } from './app.js';
+import { sb, state, $, $$, esc, fmtDate, view, go, toast, must, formData, badge, ratingInput, formatText } from './app.js';
 
 const tName = (e) => e.title || e.packages?.name || 'Training';
 const partTabs = (id, active, hasLearning) => hasLearning ? `<div class="parts" role="tablist">
@@ -116,7 +116,12 @@ async function dashboard() {
     const resBy = Object.fromEntries((last?.practical_results || []).map((r) => [r.competency_id, r]));
     const fbDone = mine.filter((a) => given.has(a.id)).length + signed.filter((p) => given.has(p.id)).length;
     const fbTotal = mine.filter((a) => ['submitted', 'competent'].includes(a.status)).length + signed.length;
-    const tab = (k, label) => `<button type="button" role="tab" data-tab="${k}" data-e="${e.id}" class="${k === 'wb' ? 'on' : ''}">${label}</button>`;
+    // The progress steps double as the tabs: colour shows progress, outline shows which one is open
+    const order = ['workbooks', 'ready_for_practical', 'practical_complete', 'completed'];
+    const idx = order.indexOf(e.status);
+    const openKey = ['wb', 'prac', 'rev', 'cert'][Math.max(idx, 0)];
+    const tab = (k, label, i) => `<button type="button" role="tab" data-tab="${k}" data-e="${e.id}" aria-selected="${k === openKey}"
+      class="${i < idx || e.status === 'completed' ? 'done' : i === idx ? 'current' : ''} ${k === openKey ? 'on' : ''}">${label}</button>`;
 
     const wbPanel = mine.length ? `<div class="table-wrap"><table><thead><tr><th>Workbook</th><th>Status</th><th></th></tr></thead><tbody>
         ${mine.map((a) => `<tr><td>${esc(a.workbooks.title)}<div class="small muted">${esc(a.workbooks.description || '')}</div>
@@ -156,13 +161,10 @@ async function dashboard() {
 
     return `<section class="card">
       <div class="row between"><h2 style="margin:0">${esc(tName(e))}</h2>${badge(e.status)}</div>
-      ${stageSteps(e.status)}
+      <div class="steps steptabs" role="tablist" aria-label="Training stages">${tab('wb', 'Workbooks', 0)}${tab('prac', 'Practical', 1)}${tab('rev', 'Final review', 2)}${tab('cert', 'Certificate', 3)}</div>
       <p>${next}</p>
-      <div class="tabs" role="tablist">${tab('wb', 'Workbooks')}${tab('prac', 'Practical')}${tab('rev', 'Review')}${tab('cert', 'Certificate')}</div>
-      <div class="tabpanel" data-panel="wb" data-e="${e.id}">${wbPanel}</div>
-      <div class="tabpanel" data-panel="prac" data-e="${e.id}" hidden>${pracPanel}</div>
-      <div class="tabpanel" data-panel="rev" data-e="${e.id}" hidden>${reviewPanel}</div>
-      <div class="tabpanel" data-panel="cert" data-e="${e.id}" hidden>${certPanel}</div>
+      ${[['wb', wbPanel], ['prac', pracPanel], ['rev', reviewPanel], ['cert', certPanel]].map(([k, html]) =>
+        `<div class="tabpanel" data-panel="${k}" data-e="${e.id}" ${k === openKey ? '' : 'hidden'}>${html}</div>`).join('')}
     </section>`;
   }).join('');
 
@@ -170,7 +172,7 @@ async function dashboard() {
     ${pending.length ? `<div class="notice"><b>Please give feedback:</b><ul style="margin:.3rem 0 0">${pending.join('')}</ul></div>` : ''}
     ${blocks || '<div class="card">You are not enrolled in any training yet.</div>'}`);
   $$('[data-tab]').forEach((b) => (b.onclick = () => {
-    $$(`[data-tab][data-e="${b.dataset.e}"]`).forEach((x) => x.classList.toggle('on', x === b));
+    $$(`[data-tab][data-e="${b.dataset.e}"]`).forEach((x) => { x.classList.toggle('on', x === b); x.setAttribute('aria-selected', x === b); });
     $$(`[data-panel][data-e="${b.dataset.e}"]`).forEach((p) => (p.hidden = p.dataset.panel !== b.dataset.tab));
   }));
 }
