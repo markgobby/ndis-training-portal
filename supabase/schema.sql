@@ -506,3 +506,12 @@ revoke execute on function public.is_admin() from public, anon;
 grant  execute on function public.is_admin() to authenticated;
 revoke execute on function public.trg_assignment_changed() from public, anon, authenticated;
 revoke execute on function public.trg_practical_changed() from public, anon, authenticated;
+
+-- Table access for the API roles (newer Supabase projects don't grant this automatically).
+-- Signed-in users get table access; row-level security above still decides which rows.
+grant usage on schema public to anon, authenticated;
+grant select, insert, update, delete on all tables in schema public to authenticated;
+grant usage, select on all sequences in schema public to authenticated;
+alter default privileges in schema public grant select, insert, update, delete on tables to authenticated;
+alter default privileges in schema public grant usage, select on sequences to authenticated;
+revoke all on all tables in schema public from anon;
