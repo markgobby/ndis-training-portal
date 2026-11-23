@@ -18,7 +18,7 @@ It's plain HTML/JavaScript, so there's no build step. The database and logins ru
 ### 2. Create the database
 1. In the project, go to **SQL Editor → New query**.
 2. Paste in all of `supabase/schema.sql` and click **Run**.
-3. Optional: run `supabase/sample-data.sql` to add a demo organisation, a package (`HIS-DEMO`), a workbook, a competency checklist and invite code `DEMO01`.
+3. Optional: run `supabase/sample-data.sql` and then `supabase/sample-learning.sql` to add a demo organisation, a package (`HIS-DEMO`), a workbook, a competency checklist and invite code `DEMO01`.
 
 ### 3. Connect the app
 1. In Supabase, go to **Project Settings → API**. Copy the **Project URL** and the **publishable / anon key**.
@@ -62,7 +62,7 @@ This is needed for the email-confirmation and password-reset links to work.
 ## Day-to-day workflow
 
 1. **Organisations**: add each client organisation.
-2. **Workbooks**: build each workbook in the app, or import its questions from a CSV (see below). Question types are short answer, long answer, multiple choice and true/false. Multiple-choice and true/false questions are marked automatically. You mark written answers as *Satisfactory* or *Not satisfactory*, and can comment on each one.
+2. **Workbooks**: each workbook has two parts. **Part 1, Learning** is information sections plus optional practice questions; learners get instant feedback, and their practice answers aren't recorded. **Part 2, Knowledge assessment** is the marked questions. Learners must confirm they've finished Part 1 before Part 2 unlocks, and that date appears on the report. You can build assessment questions in the app or import them from a CSV (see below). Question types are short answer, long answer, multiple choice and true/false. Multiple-choice and true/false questions are marked automatically. You mark written answers as *Satisfactory* or *Not satisfactory*, and can comment on each one.
 3. **Packages**: a package plan number (e.g. `HIS-PEG-01`) bundles the required workbooks and the practical competency checklist. You can also set an optional certificate validity in months.
 4. **Invite codes**: create a code for an organisation, optionally tied to a package. Press **Copy message** and paste it into an email or SMS. One code can serve a whole group. You can limit how many times it's used and set an expiry date.
 5. **Learners sign up**: they enter the code, then their name, email and password. Their account is linked to the organisation, and the package's workbooks are assigned automatically. You don't create accounts yourself.

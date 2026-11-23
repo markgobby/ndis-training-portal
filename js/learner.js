@@ -1,8 +1,61 @@
-import { sb, state, $, $$, esc, fmtDate, view, go, toast, must, formData, badge, stageSteps, ratingInput } from './app.js';
+import { sb, state, $, $$, esc, fmtDate, view, go, toast, must, formData, badge, stageSteps, ratingInput, formatText } from './app.js';
+
+const partTabs = (id, active, hasLearning) => hasLearning ? `<div class="parts" role="tablist">
+  <a role="tab" href="#/wb/${id}/learn" class="${active === 'learn' ? 'on' : ''}" aria-selected="${active === 'learn'}">Part 1 · Learning</a>
+  <a role="tab" href="#/wb/${id}/assess" class="${active === 'assess' ? 'on' : ''}" aria-selected="${active === 'assess'}">Part 2 · Knowledge assessment</a></div>` : '';
+
+// Decide which part to open: learning first until they've finished it
+async function openWorkbook(id) {
+  const a = must(await sb.from('assignments').select('status, learning_done_at, workbook_id').eq('id', id).single());
+  const { count } = await sb.from('learning_items').select('id', { count: 'exact', head: true }).eq('workbook_id', a.workbook_id);
+  const editable = ['not_started', 'in_progress', 'resubmit'].includes(a.status);
+  location.replace(`#/wb/${id}/${count && !a.learning_done_at && editable ? 'learn' : 'assess'}`);
+}
+
+async function learn(id) {
+  const a = must(await sb.from('assignments').select('*, workbooks(title, version, description)').eq('id', id).single());
+  const items = must(await sb.from('learning_items').select('*').eq('workbook_id', a.workbook_id).order('position'));
+  let pn = 0;
+  const html = items.map((it) => {
+    if (it.kind === 'content') return `<section class="learn-block">${it.title ? `<h2>${esc(it.title)}</h2>` : ''}${formatText(it.body)}</section>`;
+    pn++;
+    const opts = it.qtype === 'true_false' ? ['True', 'False'] : it.options || [];
+    return `<section class="practice" data-p="${it.id}">
+      <div class="small" style="font-weight:700;color:var(--brand)">Check your understanding ${pn}${it.title ? ' · ' + esc(it.title) : ''}</div>
+      <div style="margin:.3rem 0">${esc(it.body).replace(/\n/g, '<br>')}</div>
+      ${opts.map((o) => `<label class="choice"><input type="radio" name="p_${it.id}" value="${esc(o)}">${esc(o)}</label>`).join('')}
+      <button type="button" class="btn small secondary" data-check="${it.id}">Check answer</button>
+      <div class="pfb" aria-live="polite"></div></section>`;
+  }).join('');
+  view(`<p><a href="#/">← Back</a></p>
+    <div class="card"><h1 style="margin:0 0 .3rem">${esc(a.workbooks.title)}</h1>
+      ${partTabs(id, 'learn', true)}
+      <div class="notice info small">Read through the material below. The "Check your understanding" questions are just for practice. Your answers to them aren't saved or marked.</div>
+      ${html || '<p class="muted">No learning material for this workbook.</p>'}
+      <div class="sticky-actions row">
+        ${a.learning_done_at ? `<span class="small muted">You finished the learning material on ${fmtDate(a.learning_done_at)}.</span><a class="btn" href="#/wb/${id}/assess">Go to knowledge assessment →</a>`
+          : `<button class="btn" id="done">I've read the learning material – start the knowledge assessment →</button>`}
+      </div></div>`);
+  $$('[data-check]').forEach((b) => (b.onclick = () => {
+    const it = items.find((x) => x.id === b.dataset.check);
+    const box = b.parentElement.querySelector('.pfb');
+    const pick = $(`[name="p_${it.id}"]:checked`);
+    if (!pick) { box.innerHTML = '<div class="notice small">Choose an answer first.</div>'; return; }
+    const right = (it.answer || '').trim().toLowerCase() === pick.value.trim().toLowerCase();
+    box.innerHTML = `<div class="notice ${right ? 'info' : 'bad'} small"><b>${right ? 'Correct.' : 'Not quite.'}</b>
+      ${right ? '' : `The answer is <b>${esc(it.answer)}</b>.`} ${it.explanation ? esc(it.explanation) : ''}</div>`;
+  }));
+  $('#done') && ($('#done').onclick = async () => {
+    must(await sb.rpc('mark_learning_done', { p_assignment: id }), 'Could not continue');
+    go(`#/wb/${id}/assess`);
+  });
+}
 
 export async function route(h) {
   let m;
-  if ((m = h.match(/^#\/wb\/([\w-]+)$/))) return workbook(m[1]);
+  if ((m = h.match(/^#\/wb\/([\w-]+)\/learn$/))) return learn(m[1]);
+  if ((m = h.match(/^#\/wb\/([\w-]+)\/assess$/))) return workbook(m[1]);
+  if ((m = h.match(/^#\/wb\/([\w-]+)$/))) return openWorkbook(m[1]);
   if ((m = h.match(/^#\/fb\/(a|p)\/([\w-]+)$/))) return feedbackForm(m[1], m[2]);
   return dashboard();
 }
@@ -61,6 +114,7 @@ async function workbook(id) {
     sb.from('questions').select('*').eq('workbook_id', a.workbook_id).order('position'),
     sb.from('answers').select('*').eq('assignment_id', id),
   ]).then((r) => r.map((x) => must(x)));
+  const hasLearning = !!(await sb.from('learning_items').select('id', { count: 'exact', head: true }).eq('workbook_id', a.workbook_id)).count;
   const byQ = Object.fromEntries(ans.map((x) => [x.question_id, x]));
   const editable = ['not_started', 'in_progress', 'resubmit'].includes(a.status);
   let lastSection = null;
@@ -88,15 +142,17 @@ async function workbook(id) {
   view(`<p><a href="#/">← Back</a></p>
     <div class="card"><div class="row between"><h1 style="margin:0">${esc(a.workbooks.title)}</h1>${badge(a.status)}</div>
       <p class="muted">Version ${esc(a.workbooks.version)}${a.attempt > 1 ? ` · Attempt ${a.attempt}` : ''}</p>
+      ${partTabs(id, 'assess', hasLearning)}
+      ${hasLearning && !a.learning_done_at && editable ? `<div class="notice">Please work through <a href="#/wb/${id}/learn">Part 1 · Learning</a> before you start the assessment.</div>` : ''}
       ${a.workbooks.description ? `<p>${esc(a.workbooks.description)}</p>` : ''}
       ${a.reviewer_notes && !editable ? `<div class="notice info">Trainer comments: ${esc(a.reviewer_notes)}</div>` : ''}
       ${a.status === 'resubmit' ? `<div class="notice">Your trainer has asked you to update some answers. ${esc(a.reviewer_notes || '')}</div>` : ''}
       ${editable ? '<p class="small muted">Your answers are saved when you press Save. You can come back and finish later.</p>' : ''}
-      <form id="wb">${qHtml || '<p class="muted">This workbook has no questions yet.</p>'}
+      ${hasLearning && !a.learning_done_at && editable ? '</div>' : `<form id="wb">${qHtml || '<p class="muted">This workbook has no questions yet.</p>'}
       ${editable && qs.length ? `<div class="sticky-actions row"><button type="button" class="btn secondary" id="save">Save</button>
         <button class="btn" id="submit">Submit for marking</button></div>` : ''}</form>
-    </div>`);
-  if (!editable) return;
+    </div>`}`);
+  if (!editable || !$('#wb')) return;
 
   const collect = () => {
     const out = {};

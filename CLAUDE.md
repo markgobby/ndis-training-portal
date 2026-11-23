@@ -11,7 +11,7 @@ NDIS High Intensity Supports training portal. One trainer/assessor (the admin) r
 ## Data model (public schema)
 - `organisations` → `profiles` (`role`: admin / learner / pending; `organisation_id`)
 - `packages` (the `code` is the "package plan number") ↔ `workbooks` via `package_workbooks`; `competencies` hold each package's practical checklist
-- `questions` (types: short, long, multiple_choice, true_false); `question_keys` holds the correct answers and is admin-only, so learners can never read it
+- Each workbook has two parts. **Part 1, Learning:** `learning_items` (kind `content` = heading + simple-formatted text; kind `practice` = unrecorded multiple-choice/true-false check with answer and explanation, which learners can read). `assignments.learning_done_at` is set by `mark_learning_done()` when the learner finishes Part 1, and the assessment stays locked until then. **Part 2, Knowledge assessment:** `questions` (types: short, long, multiple_choice, true_false); `question_keys` holds the correct answers and is admin-only, so learners can never read it
 - `invites` (code → organisation + optional package; max_uses; expires_at)
 - `enrollments` (learner + package; `status`: workbooks → ready_for_practical → practical_complete → completed, plus withdrawn)
 - `assignments` (one per enrollment + workbook; not_started / in_progress / submitted / resubmit / competent) → `answers`
@@ -28,13 +28,13 @@ NDIS High Intensity Supports training portal. One trainer/assessor (the admin) r
 - `is_admin()` sits behind an admin_all policy on every table. Learners get read-only policies on their own rows.
 
 ## Front end
-- `js/app.js`: auth, sign-up, hash router, shared helpers (`must`, `esc`, `badge`, …)
+- `js/app.js`: auth, sign-up, hash router, shared helpers (`must`, `esc`, `badge`, `formatText` – blank line = paragraph, `- ` bullets, `## ` sub-heading, `**bold**`)
 - `js/admin.js`: admin screens; the organisation switcher filters through `state.org`
-- `js/learner.js`: learner dashboard, workbook form, feedback form
+- `js/learner.js`: learner dashboard, workbook Part 1 (`#/wb/:id/learn`) and Part 2 (`#/wb/:id/assess`), feedback form
 - `js/documents.js`: printable post-training report and certificate (`#/doc/report/:id`, `#/doc/cert/:id`)
 
 ## Working rules
-- Change the database with new migration SQL. Never edit live data without asking the owner first.
+- Change the database with new migration SQL, saved in `supabase/migrations/` and also appended to `schema.sql` so a fresh install stays complete. Never edit live data without asking the owner first.
 - Keep the security model intact: learners must never get write access to marking fields or read access to `question_keys`.
 - Australian English and dates (en-AU).
 - Open items: certificate expiry rules (currently an optional per-package `validity_months`), custom SMTP, and possibly a read-only login for organisation contacts.

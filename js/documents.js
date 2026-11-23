@@ -60,7 +60,7 @@ function report(e, asg, pracs, comps, back) {
 
     <h2>Theory – workbooks</h2>
     <table><thead><tr><th>Workbook</th><th>Version</th><th>Attempts</th><th>Score</th><th>Result</th><th>Date</th></tr></thead><tbody>
-      ${asg.map((a) => `<tr><td>${esc(a.workbooks.title)}</td><td>${esc(a.workbooks.version)}</td><td>${a.attempt}</td>
+      ${asg.map((a) => `<tr><td>${esc(a.workbooks.title)}${a.learning_done_at ? `<div class="small muted">Learning material completed ${fmtDate(a.learning_done_at)}</div>` : ''}</td><td>${esc(a.workbooks.version)}</td><td>${a.attempt}</td>
         <td>${a.score != null ? a.score + '%' : '—'}</td><td>${a.status === 'competent' ? 'Competent' : esc(a.status.replace(/_/g, ' '))}</td>
         <td>${fmtDate(a.reviewed_at || a.submitted_at)}</td></tr>`).join('') || '<tr><td colspan="6">None</td></tr>'}
     </tbody></table>

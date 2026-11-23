@@ -24,6 +24,22 @@ export function must(res, label = 'Something went wrong') {
   if (res.error) { console.error(res.error); toast(`${label}: ${res.error.message}`, true); throw res.error; }
   return res.data;
 }
+// Simple, safe formatting for learning text: blank line = new paragraph,
+// lines starting "- " = bullet list, "## " = sub-heading, **bold**.
+export function formatText(src) {
+  const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  let out = '', list = [];
+  const flush = () => { if (list.length) { out += `<ul>${list.map((l) => `<li>${inline(l)}</li>`).join('')}</ul>`; list = []; } };
+  for (const raw of String(src ?? '').split('\n')) {
+    const l = raw.trim();
+    if (/^[-•]\s+/.test(l)) { list.push(l.replace(/^[-•]\s+/, '')); continue; }
+    flush();
+    if (!l) continue;
+    out += /^##\s+/.test(l) ? `<h3>${inline(l.replace(/^##\s+/, ''))}</h3>` : `<p>${inline(l)}</p>`;
+  }
+  flush();
+  return out;
+}
 export function formData(form) { return Object.fromEntries(new FormData(form).entries()); }
 
 const STATUS = {

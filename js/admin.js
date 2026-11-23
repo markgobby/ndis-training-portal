@@ -90,7 +90,7 @@ async function learner(id) {
       ${stageSteps(e.status)}
       <h3>Workbooks</h3>
       <div class="table-wrap"><table><thead><tr><th>Workbook</th><th>Status</th><th>Score</th><th>Submitted</th><th></th></tr></thead><tbody>
-      ${mine.map((a) => `<tr><td>${esc(a.workbooks.title)} <span class="small muted">v${esc(a.workbooks.version)}</span>${a.attempt > 1 ? ` <span class="small muted">· attempt ${a.attempt}</span>` : ''}</td>
+      ${mine.map((a) => `<tr><td>${esc(a.workbooks.title)} <span class="small muted">v${esc(a.workbooks.version)}</span>${a.attempt > 1 ? ` <span class="small muted">· attempt ${a.attempt}</span>` : ''}${a.learning_done_at ? `<div class="small muted">Learning read ${fmtDate(a.learning_done_at)}</div>` : ''}</td>
         <td>${badge(a.status)}</td><td>${a.score != null ? a.score + '%' : '—'}</td><td>${fmtDate(a.submitted_at)}</td>
         <td class="right nowrap">${['submitted', 'competent', 'resubmit'].includes(a.status) ? `<a class="btn small" href="#/a/review/${a.id}">${a.status === 'submitted' ? 'Mark' : 'View'}</a>` : ''}
           ${a.status === 'not_started' ? `<button class="btn small danger" data-unassign="${a.id}">Remove</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">None</td></tr>'}
@@ -275,7 +275,7 @@ function parseCSV(text) {
 
 async function workbookEditor(id) {
   const isNew = id === 'new';
-  let w = { title: '', description: '', version: '1.0', pass_percent: 100, is_active: true }, qs = [], used = 0;
+  let w = { title: '', description: '', version: '1.0', pass_percent: 100, is_active: true }, qs = [], used = 0, lis = [];
   if (!isNew) {
     w = must(await sb.from('workbooks').select('*').eq('id', id).single());
     const raw = must(await sb.from('questions').select('*').eq('workbook_id', id).order('position'));
@@ -283,8 +283,43 @@ async function workbookEditor(id) {
     const km = Object.fromEntries(keys.map((k) => [k.question_id, k]));
     qs = raw.map((q) => ({ ...q, correct_answer: km[q.id]?.correct_answer || '', marking_guide: km[q.id]?.marking_guide || '' }));
     used = (await sb.from('assignments').select('id', { count: 'exact', head: true }).eq('workbook_id', id).neq('status', 'not_started')).count || 0;
+    lis = must(await sb.from('learning_items').select('*').eq('workbook_id', id).order('position'));
   }
   const original = new Set(qs.map((q) => q.id));
+  const originalLi = new Set(lis.map((x) => x.id));
+
+  // ----- Part 1: learning material editor -----
+  const liBlock = (it, i) => it.kind === 'content' ? `<div class="qedit learn-item" data-li="${it.id}" data-kind="content">
+      <div class="row between"><b>Information section</b>${liBtns(i)}</div>
+      <label>Heading</label><input data-f="title" value="${esc(it.title)}">
+      <label>Text</label><textarea data-f="body" style="min-height:9rem">${esc(it.body)}</textarea>
+      <div class="small muted">Blank line = new paragraph · start a line with "- " for bullet points · **bold** · "## " for a sub-heading</div>
+    </div>` : `<div class="qedit learn-item practice-item" data-li="${it.id}" data-kind="practice">
+      <div class="row between"><b>Practice question (not recorded)</b>${liBtns(i)}</div>
+      <div class="inline-fields"><div><label>Type</label><select data-f="qtype">${[['multiple_choice', 'Multiple choice'], ['true_false', 'True / False']]
+        .map(([v, l]) => `<option value="${v}" ${it.qtype === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div>
+      <label>Question</label><textarea data-f="body" style="min-height:3.5rem">${esc(it.body)}</textarea>
+      <div ${it.qtype === 'true_false' ? 'hidden' : ''}><label>Options (one per line)</label><textarea data-f="options" style="min-height:4rem">${esc((it.options || []).join('\n'))}</textarea></div>
+      <label>Correct answer</label><input data-f="answer" value="${esc(it.answer)}">
+      <label>Explanation shown after they check</label><input data-f="explanation" value="${esc(it.explanation)}">
+    </div>`;
+  const liBtns = (i) => `<div class="row"><button type="button" class="btn small secondary" data-liup="${i}" aria-label="Move up">↑</button>
+      <button type="button" class="btn small secondary" data-lidown="${i}" aria-label="Move down">↓</button>
+      <button type="button" class="btn small danger" data-lidel="${i}">Delete</button></div>`;
+  const readLi = () => $$('[data-li]').map((el) => {
+    const g = (f) => el.querySelector(`[data-f="${f}"]`)?.value ?? '';
+    const kind = el.dataset.kind;
+    return kind === 'content' ? { id: el.dataset.li, kind, title: g('title').trim(), body: g('body') }
+      : { id: el.dataset.li, kind, qtype: g('qtype'), body: g('body').trim(), options: g('options').split('\n').map((x) => x.trim()).filter(Boolean),
+          answer: g('answer').trim(), explanation: g('explanation').trim() };
+  });
+  const drawLi = () => {
+    $('#lis').innerHTML = lis.map(liBlock).join('') || '<p class="muted">No learning material yet. Learners will go straight to the knowledge assessment.</p>';
+    $$('[data-lidel]').forEach((b) => (b.onclick = () => { lis = readLi(); lis.splice(+b.dataset.lidel, 1); drawLi(); }));
+    $$('[data-liup]').forEach((b) => (b.onclick = () => { lis = readLi(); const i = +b.dataset.liup; if (i > 0) [lis[i - 1], lis[i]] = [lis[i], lis[i - 1]]; drawLi(); }));
+    $$('[data-lidown]').forEach((b) => (b.onclick = () => { lis = readLi(); const i = +b.dataset.lidown; if (i < lis.length - 1) [lis[i + 1], lis[i]] = [lis[i], lis[i + 1]]; drawLi(); }));
+    $$('[data-li] [data-f="qtype"]').forEach((s) => (s.onchange = () => { lis = readLi(); drawLi(); }));
+  };
 
   const qBlock = (q, i) => `<div class="qedit" data-q="${q.id}">
     <div class="row between"><b>Question ${i + 1}</b><div class="row">
@@ -328,7 +363,14 @@ async function workbookEditor(id) {
       </div>
       <label>Description / instructions for learners</label><textarea name="description">${esc(w.description)}</textarea>
       <label class="choice" style="max-width:260px"><input type="checkbox" name="is_active" ${w.is_active ? 'checked' : ''}>Active (can be assigned)</label>
-      <h2>Questions</h2><div id="qs"></div>
+      <h2>Part 1 · Learning material</h2>
+      <p class="small muted">What the learner needs to know, with optional practice questions. Practice answers are never recorded.</p>
+      <div id="lis"></div>
+      <div class="row"><button type="button" class="btn secondary" id="addc">+ Information section</button>
+        <button type="button" class="btn secondary" id="addp">+ Practice question</button></div>
+      <h2>Part 2 · Knowledge assessment</h2>
+      <p class="small muted">Marked questions. Multiple choice and true/false are marked automatically; you mark written answers.</p>
+      <div id="qs"></div>
       <div class="row"><button type="button" class="btn secondary" id="addq">+ Add question</button>
         <button type="button" class="btn secondary" id="impbtn">Import from CSV</button></div>
       <div id="imp" hidden class="qedit">
@@ -341,6 +383,9 @@ async function workbookEditor(id) {
         ${!isNew ? '<button type="button" class="btn secondary" id="dup">Save as new version</button>' : ''}</div>
     </form>`);
   drawQs();
+  drawLi();
+  $('#addc').onclick = () => { lis = readLi(); lis.push({ id: uuid(), kind: 'content', title: '', body: '' }); drawLi(); };
+  $('#addp').onclick = () => { lis = readLi(); lis.push({ id: uuid(), kind: 'practice', qtype: 'multiple_choice', body: '', options: [], answer: '', explanation: '' }); drawLi(); };
 
   $('#addq').onclick = () => { qs = readQs(); qs.push({ id: uuid(), qtype: 'short', marks: 1, prompt: '', options: [], correct_answer: '', marking_guide: '', section: qs.at(-1)?.section || '' }); drawQs(); };
   $('#impbtn').onclick = () => ($('#imp').hidden = !$('#imp').hidden);
@@ -363,7 +408,9 @@ async function workbookEditor(id) {
 
   const save = async (asNew) => {
     const d = formData($('#wf'));
-    qs = readQs();
+    qs = readQs(); lis = readLi();
+    const badLi = lis.findIndex((x) => x.kind === 'practice' && (!x.body || !x.answer || (x.qtype === 'multiple_choice' && (x.options.length < 2 || !x.options.includes(x.answer))) || (x.qtype === 'true_false' && !['True', 'False'].includes(x.answer))));
+    if (badLi >= 0) return toast(`Learning item ${badLi + 1}: practice questions need a question, options, and a correct answer that matches an option exactly`, true);
     const bad = qs.findIndex((q) => !q.prompt || (q.qtype === 'multiple_choice' && q.options.length < 2));
     if (bad >= 0) return toast(`Question ${bad + 1} needs text${qs[bad].qtype === 'multiple_choice' ? ' and at least 2 options' : ''}`, true);
     const mcBad = qs.findIndex((q) => (q.qtype === 'multiple_choice' && q.correct_answer && !q.options.includes(q.correct_answer)) ||
@@ -374,7 +421,7 @@ async function workbookEditor(id) {
     if (isNew || asNew) {
       if (asNew) { rec.version = prompt('Version number for the new copy?', String((parseFloat(w.version) || 1) + 1)) || rec.version; }
       wid = must(await sb.from('workbooks').insert(rec).select('id').single()).id;
-      if (asNew) qs = qs.map((q) => ({ ...q, id: uuid() }));
+      if (asNew) { qs = qs.map((q) => ({ ...q, id: uuid() })); lis = lis.map((x) => ({ ...x, id: uuid() })); }
     } else {
       must(await sb.from('workbooks').update(rec).eq('id', id));
       const removed = [...original].filter((x) => !qs.some((q) => q.id === x));
@@ -382,6 +429,13 @@ async function workbookEditor(id) {
         if (used && !confirm(`Delete ${removed.length} question(s)? Learner answers to them will be lost.`)) return;
         must(await sb.from('questions').delete().in('id', removed));
       }
+      const removedLi = [...originalLi].filter((x) => !lis.some((l) => l.id === x));
+      if (removedLi.length) must(await sb.from('learning_items').delete().in('id', removedLi));
+    }
+    if (lis.length) {
+      must(await sb.from('learning_items').upsert(lis.map((x, i) => ({ id: x.id, workbook_id: wid, position: i + 1, kind: x.kind, title: x.title || null, body: x.body,
+        qtype: x.kind === 'practice' ? x.qtype : null, options: x.kind === 'practice' && x.qtype === 'multiple_choice' ? x.options : [],
+        answer: x.kind === 'practice' ? x.answer : null, explanation: x.kind === 'practice' ? x.explanation || null : null }))));
     }
     if (qs.length) {
       must(await sb.from('questions').upsert(qs.map((q, i) => ({ id: q.id, workbook_id: wid, position: i + 1, section: q.section, prompt: q.prompt, qtype: q.qtype,
