@@ -11,6 +11,10 @@ export const SUPABASE_ANON_KEY = 'sb_publishable_eDpjACIwYb5eT2BZgaQbGQ_P5q8Eqrg
 // Set to '' to switch the guest demo off.
 export const DEMO_INVITE_CODE = 'DEMO01';
 
+// Learners sign in with a username, not an email. Supabase Auth still needs an email, so each username maps to a private
+// internal address on this domain. It is never shown and never emailed to.
+export const LEARNER_EMAIL_DOMAIN = 'learner.local';
+
 export const BRAND = {
   name: 'High Intensity Supports Training',
   tagline: 'NDIS High Intensity Daily Personal Activities',

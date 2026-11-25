@@ -43,6 +43,9 @@ export async function route(h) {
   if ((m = h.match(/^#\/a\/workbook\/([\w-]+)$/))) return workbookEditor(m[1]);
   if (h === '#/a/packages') return packages();
   if ((m = h.match(/^#\/a\/package\/([\w-]+)$/))) return packageEditor(m[1]);
+  if (h === '#/a/requests') return requestsList();
+  if ((m = h.match(/^#\/a\/request\/([\w-]+)$/))) return requestDetail(m[1]);
+  if (h === '#/a/accounts') return accounts();
   if (h === '#/a/orgs') return orgs();
   if (h === '#/a/invites') return invites();
   if (h === '#/a/feedback') return feedback();
@@ -631,6 +634,95 @@ async function packageEditor(id) {
     }
     toast('Package saved'); go(`#/a/package/${pid}`);
   };
+}
+
+// ---------------- pack requests (organisation requests, review, approval, class codes) ----------------
+const reqBadge = (st) => badge(st === 'submitted' ? 'submitted_req' : st);
+async function requestsList() {
+  const rows = must(await orgF(sb.from('pack_requests').select('id,title,status,created_at,submitted_at,organisations(name),pack_request_items(count)').neq('status', 'draft').order('submitted_at', { ascending: false }), 'organisation_id'));
+  const order = { submitted: 0, under_review: 1, approved: 2 };
+  rows.sort((a, b) => (order[a.status] - order[b.status]) || (new Date(b.submitted_at) - new Date(a.submitted_at)));
+  view(`<h1>Pack requests <span class="muted small">· ${esc(await orgName())}</span></h1>
+    ${rows.length ? `<div class="card table-wrap"><table><thead><tr><th>Organisation</th><th>Request</th><th>Status</th><th>Items</th><th>Submitted</th></tr></thead><tbody>
+      ${rows.map((r) => `<tr><td>${esc(r.organisations?.name)}</td><td><a href="#/a/request/${r.id}">${esc(r.title)}</a></td><td>${reqBadge(r.status)}</td><td>${r.pack_request_items[0]?.count ?? 0}</td><td>${fmtDate(r.submitted_at)}</td></tr>`).join('')}</tbody></table></div>`
+      : '<div class="card muted">No submitted requests yet.</div>'}`);
+}
+
+async function requestDetail(id) {
+  const [rq, items, code] = await Promise.all([
+    sb.from('pack_requests').select('*, organisations(name)').eq('id', id).single(),
+    sb.from('pack_request_items').select('id, skipped_reason, assignment_id, roster_learners(id, full_name, username, profile_id), workbooks(title)').eq('request_id', id),
+    sb.from('class_codes').select('code, expires_at').eq('request_id', id),
+  ]).then((r) => r.map((x) => must(x)));
+  const people = new Map();
+  items.forEach((i) => { const r = i.roster_learners; if (!people.has(r.id)) people.set(r.id, { ...r, mods: [] }); people.get(r.id).mods.push(i); });
+  const locked = rq.status === 'approved';
+  const in3 = new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10);
+  const cc = code[0];
+  view(`<p><a href="#/a/requests">← Pack requests</a></p>
+    <div class="row between"><h1>${esc(rq.title)}</h1>${reqBadge(rq.status)}</div>
+    <p class="muted">${esc(rq.organisations?.name)} · submitted ${fmtDate(rq.submitted_at)}${rq.preferred_dates ? ` · preferred dates: ${esc(rq.preferred_dates)}` : ''}</p>
+    ${rq.notes ? `<div class="card"><b>Organisation notes</b><p style="margin:.3rem 0 0">${esc(rq.notes)}</p></div>` : ''}
+    <section class="card"><h2 style="margin-top:0">People and modules</h2>
+      ${[...people.values()].map((p) => `<div style="margin-bottom:.8rem"><b>${esc(p.full_name)}</b> <span class="small muted">${esc(p.username)} · ${p.profile_id ? 'activated' : 'not activated'}</span>
+        ${p.profile_id ? `<button class="btn small secondary" data-reset="${p.id}" data-name="${esc(p.full_name)}" style="margin-left:.5rem">Reset password</button>` : ''}
+        <ul style="margin:.2rem 0">${p.mods.map((m) => `<li>${esc(m.workbooks?.title)} ${m.skipped_reason ? `<span class="badge">${esc(m.skipped_reason)}</span>` : m.assignment_id ? '<span class="badge ok">Assigned</span>' : ''}</li>`).join('')}</ul></div>`).join('') || '<p class="muted">No items.</p>'}
+    </section>
+    <section class="card"><h2 style="margin-top:0">Review</h2>
+      <label>Note to the organisation (quote, dates, anything to change)</label><textarea id="note" rows="3">${esc(rq.admin_note)}</textarea>
+      ${locked ? `<div class="notice info">Class code: <b style="letter-spacing:.1em">${esc(cc?.code || '…')}</b> · valid until ${fmtDate(cc?.expires_at)}</div>
+        <div class="row"><label class="small" style="margin:0">New expiry</label><input type="date" id="exp" value="${cc ? new Date(cc.expires_at).toISOString().slice(0, 10) : in3}">
+        <button class="btn small secondary" id="extend">Update expiry</button><button class="btn small danger" id="newcode">Issue a new code</button></div>`
+      : `<div class="row" style="margin-top:.8rem"><button class="btn secondary" id="review">Mark under review</button><button class="btn secondary" id="back">Send back to draft</button></div>
+        <hr style="border:0;border-top:1px solid var(--line)">
+        <div class="row"><label class="small" style="margin:0">Class code valid until</label><input type="date" id="exp" value="${in3}"><button class="btn ok" id="approve">Approve and create class code</button></div>
+        <p class="small muted">Approval creates the enrolments for anyone already activated. New learners get theirs when they activate with the code.</p>`}
+    </section>`);
+  const note = () => $('#note').value.trim() || null;
+  const expiry = () => new Date(`${$('#exp').value}T23:59:59+08:00`).toISOString();
+  const status = (s, msg) => async () => { must(await sb.rpc('admin_review_request', { p_request: id, p_status: s, p_note: note() })); toast(msg); requestDetail(id); };
+  if (!locked) {
+    $('#review').onclick = status('under_review', 'Marked under review');
+    $('#back').onclick = status('draft', 'Sent back to the organisation');
+    $('#approve').onclick = async () => {
+      const c = must(await sb.rpc('approve_pack_request', { p_request: id, p_expires: expiry(), p_note: note() }), 'Could not approve');
+      toast(`Approved. Class code ${c}`); requestDetail(id);
+    };
+  } else {
+    $('#extend').onclick = async () => { must(await sb.rpc('set_class_code', { p_request: id, p_expires: expiry(), p_new: false })); toast('Expiry updated'); requestDetail(id); };
+    $('#newcode').onclick = async () => { if (!confirm('The old code will stop working. Issue a new one?')) return; must(await sb.rpc('set_class_code', { p_request: id, p_expires: expiry(), p_new: true })); toast('New code issued'); requestDetail(id); };
+  }
+  $$('[data-reset]').forEach((b) => (b.onclick = async () => {
+    const pw = prompt(`New password for ${b.dataset.name} (at least 8 characters).`);
+    if (!pw) return;
+    must(await sb.rpc('reset_learner_password', { p_roster: b.dataset.reset, p_password: pw }), 'Could not reset'); toast('Password reset');
+  }));
+}
+
+// ---------------- accounts: approve organisation sign-ups ----------------
+async function accounts() {
+  const [pend, orgsL, orgUsers] = await Promise.all([
+    sb.from('profiles').select('id,full_name,email,phone,requested_org,created_at').eq('role', 'pending').order('created_at'),
+    sb.from('organisations').select('id,name').order('name'),
+    sb.from('profiles').select('id,full_name,email,organisations(name)').eq('role', 'organisation').order('full_name'),
+  ]).then((r) => r.map((x) => must(x)));
+  const guess = (n) => orgsL.find((o) => o.name.toLowerCase() === String(n || '').trim().toLowerCase())?.id;
+  view(`<h1>Accounts</h1>
+    <section class="card"><h2 style="margin-top:0">Waiting for approval</h2>
+      ${pend.length ? pend.map((p) => `<form class="inline-fields" data-pend="${p.id}">
+        <div><b>${esc(p.full_name)}</b><div class="small muted">${esc(p.email)}${p.phone ? ' · ' + esc(p.phone) : ''}</div><div class="small">Asked for: ${esc(p.requested_org || '—')}</div></div>
+        <div><label>Organisation</label><select name="org" required><option value="">Choose…</option>${opt(orgsL, guess(p.requested_org))}</select></div>
+        <div style="align-self:end"><button class="btn small">Approve as organisation</button></div></form>`).join('<hr style="border:0;border-top:1px solid var(--line)">')
+      : '<p class="muted">Nobody waiting. New organisation contacts appear here after they request an account.</p>'}
+      ${orgsL.length ? '' : '<div class="notice">Add an <a href="#/a/orgs">organisation</a> first.</div>'}
+    </section>
+    <section class="card"><h2 style="margin-top:0">Organisation accounts</h2>
+      ${orgUsers.length ? `<ul>${orgUsers.map((u) => `<li>${esc(u.full_name)} <span class="small muted">${esc(u.email)} · ${esc(u.organisations?.name)}</span></li>`).join('')}</ul>` : '<p class="muted">None yet.</p>'}</section>`);
+  $$('[data-pend]').forEach((f) => (f.onsubmit = async (e) => {
+    e.preventDefault();
+    must(await sb.from('profiles').update({ role: 'organisation', organisation_id: formData(f).org }).eq('id', f.dataset.pend));
+    toast('Approved'); accounts();
+  }));
 }
 
 // ---------------- organisations ----------------

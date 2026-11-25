@@ -1,5 +1,6 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import { SUPABASE_URL, SUPABASE_ANON_KEY, BRAND, DEMO_INVITE_CODE } from './config.js';
+import { SUPABASE_URL, SUPABASE_ANON_KEY, BRAND, DEMO_INVITE_CODE, LEARNER_EMAIL_DOMAIN } from './config.js';
+const learnerEmail = (u) => `${String(u).trim().toLowerCase()}@${LEARNER_EMAIL_DOMAIN}`;
 
 export const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 export const state = { user: null, profile: null, org: '' };
@@ -48,6 +49,8 @@ const STATUS = {
   workbooks: ['Workbooks', 'info'], ready_for_practical: ['Ready for practical', 'warn'],
   practical_complete: ['Practical complete', 'ok'], completed: ['Completed', 'ok'], withdrawn: ['Withdrawn', 'bad'],
   draft: ['Draft', ''], not_yet_competent: ['Not yet competent', 'bad'],
+  submitted_req: ['Submitted', 'info'], under_review: ['Under review', 'warn'], approved: ['Approved', 'ok'],
+  awaiting_activation: ['Awaiting first login', 'warn'], skipped: ['Skipped', ''],
 };
 export const badge = (s) => { const [l, c] = STATUS[s] || [s, '']; return `<span class="badge ${c}">${esc(l)}</span>`; };
 
@@ -74,7 +77,7 @@ async function renderTopbar() {
     const orgs = must(await sb.from('organisations').select('id,name').order('name'));
     if (state.org && !orgs.some((o) => o.id === state.org)) state.org = '';
     const links = [['#/', 'Dashboard'], ['#/a/learners', 'Learners'], ['#/a/review', 'Review'], ['#/a/workbooks', 'Workbooks'],
-      ['#/a/packages', 'Packages'], ['#/a/orgs', 'Organisations'], ['#/a/invites', 'Invite codes'], ['#/a/feedback', 'Feedback']];
+      ['#/a/packages', 'Packages'], ['#/a/requests', 'Pack requests'], ['#/a/accounts', 'Accounts'], ['#/a/orgs', 'Organisations'], ['#/a/invites', 'Invite codes'], ['#/a/feedback', 'Feedback']];
     bar.innerHTML = `<div class="inner">
       <a class="title" href="#/">${esc(BRAND.name)} · Admin</a>
       <label class="small" style="margin:0;color:#fff" for="orgSwitch">Viewing</label>
@@ -90,6 +93,12 @@ async function renderTopbar() {
       try { localStorage.setItem('orgFilter', state.org); } catch {}
       render();
     };
+  } else if (state.profile.role === 'organisation') {
+    const links = [['#/', 'Dashboard'], ['#/o/learners', 'Learners'], ['#/o/requests', 'Pack requests']];
+    bar.innerHTML = `<div class="inner"><a class="title" href="#/">${esc(BRAND.name)} · Organisation</a>
+      <span class="small">${esc(state.profile.full_name || '')}</span>
+      <button class="btn small" id="logout">Sign out</button>
+      <nav>${links.map(([href, l]) => `<a href="${href}" class="${(href === '#/' ? h === '#/' : h.startsWith(href)) ? 'active' : ''}">${l}</a>`).join('')}</nav></div>`;
   } else {
     const guest = state.user?.is_anonymous;
     bar.innerHTML = `<div class="inner"><a class="title" href="#/">${esc(BRAND.name)}</a>
@@ -105,26 +114,97 @@ function loginView() {
   view(`<div class="card narrow">
     <h1>Sign in</h1>
     <form id="f">
-      <label for="email">Email</label><input id="email" name="email" type="email" autocomplete="email" required>
+      <label for="who">Username or email</label><input id="who" name="who" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+      <div class="small muted">Learners: your username, such as JohnSmith1. Organisations and trainers: your email.</div>
       <label for="pw">Password</label><input id="pw" name="password" type="password" autocomplete="current-password" required>
       <button class="btn block">Sign in</button>
     </form>
     <p class="center"><button class="linkbtn" id="forgot">Forgot password?</button></p>
     <hr style="border:0;border-top:1px solid var(--line)">
-    <p class="center">New learner with an invite code?</p>
-    <a class="btn secondary block center" href="#/join">Create my account</a>
+    <a class="btn secondary block center" href="#/activate">First time? Activate with a class code</a>
+    <p class="center small" style="margin-top:1rem"><a href="#/org-signup">Organisation? Request an account</a></p>
   </div>`);
   $('#f').onsubmit = async (e) => {
-    e.preventDefault(); const d = formData(e.target);
-    const { error } = await sb.auth.signInWithPassword({ email: d.email.trim(), password: d.password });
-    if (error) return toast(error.message, true);
+    e.preventDefault(); const d = formData(e.target); const who = d.who.trim();
+    const email = who.includes('@') ? who : learnerEmail(who);
+    const { error } = await sb.auth.signInWithPassword({ email, password: d.password });
+    if (error) return toast(error.message === 'Invalid login credentials' ? 'Username or password not recognised' : error.message, true);
     await boot();
   };
   $('#forgot').onclick = async () => {
-    const email = $('#email').value.trim();
-    if (!email) return toast('Enter your email above first', true);
-    const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+    const who = $('#who').value.trim();
+    if (!who) return toast('Enter your username or email above first', true);
+    if (!who.includes('@')) return toast('Learners: ask your organisation or trainer to reset your password.', true);
+    const { error } = await sb.auth.resetPasswordForEmail(who, { redirectTo: location.origin + location.pathname });
     toast(error ? error.message : 'Check your email for a reset link', !!error);
+  };
+}
+
+// First login: username + class code from the training day, then the learner sets their own password
+function activateView() {
+  view(`<div class="card narrow">
+    <h1>Activate your account</h1>
+    <p class="muted">Enter your username and the class code given at your training session.</p>
+    <form id="f1">
+      <label for="un">Username</label><input id="un" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+      <label for="cc">Class code</label><input id="cc" name="code" autocomplete="off" required style="text-transform:uppercase">
+      <button class="btn block">Check</button>
+    </form>
+    <div id="step2"></div>
+    <p class="center small"><a href="#/login">Already activated? Sign in</a></p>
+  </div>`);
+  $('#f1').onsubmit = async (e) => {
+    e.preventDefault(); const d = formData(e.target);
+    const [r] = must(await sb.rpc('check_activation', { p_username: d.username, p_code: d.code }), 'Could not check');
+    if (!r?.valid) return toast(r?.message || 'Could not check those details', true);
+    $('#f1').querySelectorAll('input,button').forEach((x) => (x.disabled = true));
+    $('#step2').innerHTML = `<div class="notice info">Welcome <b>${esc(r.full_name)}</b><br>${esc(r.organisation_name)} · ${r.module_count} module${r.module_count === 1 ? '' : 's'}</div>
+      <form id="f2">
+        <label for="pw">Choose a password (at least 8 characters)</label><input id="pw" name="password" type="password" minlength="8" autocomplete="new-password" required>
+        <label for="pw2">Repeat password</label><input id="pw2" name="password2" type="password" minlength="8" autocomplete="new-password" required>
+        <div class="small muted">Keep it somewhere safe. There is no email reset: your organisation or trainer can set a new one.</div>
+        <button class="btn block">Activate and sign in</button>
+      </form>`;
+    $('#f2').onsubmit = async (ev) => {
+      ev.preventDefault(); const p = formData(ev.target);
+      if (p.password !== p.password2) return toast('Passwords do not match', true);
+      const btn = ev.target.querySelector('button'); btn.disabled = true;
+      const { data, error } = await sb.auth.signUp({
+        email: learnerEmail(d.username), password: p.password,
+        options: { data: { username: d.username.trim(), class_code: d.code.trim() } },
+      });
+      btn.disabled = false;
+      if (error) return toast(error.message.includes('Database error') ? 'Those details could not be used. Please check with your trainer.' : error.message, true);
+      if (!data.session) { const r2 = await sb.auth.signInWithPassword({ email: learnerEmail(d.username), password: p.password }); if (r2.error) return toast(r2.error.message, true); }
+      await boot();
+    };
+  };
+}
+
+// Organisation contacts request access; the trainer links the account to the organisation
+function orgSignupView() {
+  view(`<div class="card narrow">
+    <h1>Organisation account</h1>
+    <p class="muted">Request an account to submit training requests and see your learners' progress. The trainer will confirm your account before it can be used.</p>
+    <form id="f">
+      <label for="on">Organisation name</label><input id="on" name="org_name" required>
+      <label for="fn">Your name</label><input id="fn" name="full_name" autocomplete="name" required>
+      <label for="ph">Phone (optional)</label><input id="ph" name="phone" type="tel" autocomplete="tel">
+      <label for="em">Email</label><input id="em" name="email" type="email" autocomplete="email" required>
+      <label for="pw">Password (at least 8 characters)</label><input id="pw" name="password" type="password" minlength="8" autocomplete="new-password" required>
+      <button class="btn block">Request account</button>
+    </form>
+    <p class="center small"><a href="#/login">Back to sign in</a></p>
+  </div>`);
+  $('#f').onsubmit = async (e) => {
+    e.preventDefault(); const d = formData(e.target);
+    const btn = e.target.querySelector('button'); btn.disabled = true;
+    const { data, error } = await sb.auth.signUp({ email: d.email.trim(), password: d.password,
+      options: { emailRedirectTo: location.origin + location.pathname, data: { full_name: d.full_name.trim(), phone: d.phone.trim(), org_name: d.org_name.trim() } } });
+    btn.disabled = false;
+    if (error) return toast(error.message, true);
+    if (!data.session) return view(`<div class="card narrow center"><h1>Check your email</h1><p>We've sent a confirmation link to <b>${esc(d.email)}</b>. Confirm it, then sign in.</p><a class="btn" href="#/login">Go to sign in</a></div>`);
+    await boot();
   };
 }
 
@@ -186,21 +266,22 @@ function newPasswordView() {
 }
 
 // ---------------- router ----------------
-let learner, admin, docs;
+let learner, admin, orgMod, docs;
 export async function render() {
   const h = location.hash || '#/';
   if (h === '#/newpass') return newPasswordView();
   if (h === '#/try') return tryDemo();
   if (!state.user) {
     await renderTopbar();
-    return h === '#/join' ? joinView() : loginView();
+    return h === '#/join' ? joinView() : h === '#/activate' ? activateView() : h === '#/org-signup' ? orgSignupView() : loginView();
   }
   await renderTopbar();
   const role = state.profile?.role;
   if (h.startsWith('#/doc/')) { docs ||= await import('./documents.js'); return docs.route(h); }
   if (role === 'admin') { admin ||= await import('./admin.js'); return admin.route(h); }
+  if (role === 'organisation') { orgMod ||= await import('./org.js'); return orgMod.route(h); }
   if (role === 'learner') { learner ||= await import('./learner.js'); return learner.route(h); }
-  view(`<div class="card narrow center"><h1>Account pending</h1><p>Your account has been created but hasn't been given access yet. Please contact your trainer.</p></div>`);
+  view(`<div class="card narrow center"><h1>Account pending</h1><p>Your account has been created but hasn't been approved yet. The trainer will link it to your organisation shortly.</p></div>`);
 }
 
 // Guest demo for presentations: a private, temporary learner account with no sign-up
@@ -229,7 +310,7 @@ async function boot() {
     const { data } = await sb.from('profiles').select('*').eq('id', state.user.id).maybeSingle();
     state.profile = data;
     try { state.org = localStorage.getItem('orgFilter') || ''; } catch {}
-    if (['#/login', '#/join'].includes(location.hash)) location.hash = '#/';
+    if (['#/login', '#/join', '#/activate', '#/org-signup'].includes(location.hash)) location.hash = '#/';
   }
   await render();
 }
