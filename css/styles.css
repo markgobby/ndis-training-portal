@@ -215,6 +215,7 @@ main.landing { max-width: none; padding: 0; }
 .steps4 li { border: 1px solid var(--line); border-top: 3px solid var(--accent); border-radius: 10px; padding: 1.1rem; background: #fff; }
 .steps4 .num { display: block; font-size: .75rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin-top: .5rem; }
 .landing h3 { margin: .35rem 0 .3rem; } .landing p { margin: 0; }
+.landing .eyebrow { margin: 0 0 .75rem; } .landing .lead { margin: 0 0 1.75rem; } .landing .hero-note { margin: 1rem 0 0; } .landing .cta-band p { margin: 0 0 1.25rem; }
 .steps4 p, .feat-item p, .trust p { color: var(--muted); font-size: .95rem; }
 .feat { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
 .feat-item { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 1.1rem; }
