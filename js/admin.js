@@ -67,14 +67,14 @@ async function dashboard() {
   view(`<h1>Dashboard <span class="muted small">· ${esc(await orgName())}</span></h1>
     <div class="grid">
       <div class="card"><div class="stat">${lc.count ?? 0}</div>Learners</div>
-      <div class="card"><div class="stat">${queue.data.length}</div>Workbooks to mark</div>
+      <a class="card" href="#/a/review" style="text-decoration:none;color:inherit"><div class="stat">${queue.data.length}</div>Workbooks to mark</a>
       <div class="card"><div class="stat">${ready.data.length}</div>Ready for practical</div>
       <div class="card"><div class="stat">${cert.data.length}</div>Awaiting certificate</div>
       <div class="card"><div class="stat">${done.count ?? 0}</div>Completed</div>
     </div>
     <div class="grid">
-      <section class="card"><h2 style="margin-top:0">To mark</h2>${list(queue.data, 'Nothing waiting.', (a) =>
-        `<li><a href="#/a/review/${a.id}">${esc(a.profiles?.full_name)} – ${esc(a.workbooks.title)}</a> <span class="small muted">${fmtDate(a.submitted_at)}</span></li>`)}</section>
+      <section class="card"><h2 style="margin-top:0">To mark</h2>${list(queue.data.slice(0, 8), 'Nothing waiting.', (a) =>
+        `<li><a href="#/a/review/${a.id}">${esc(a.profiles?.full_name)} – ${esc(a.workbooks.title)}</a> <span class="small muted">${fmtDate(a.submitted_at)}</span></li>`)}${queue.data.length > 8 ? `<p><a href="#/a/review">View all ${queue.data.length} in the review queue →</a></p>` : ''}</section>
       <section class="card"><h2 style="margin-top:0">Ready for practical training</h2>${list(ready.data, 'No one yet.', (e) =>
         `<li><a href="#/a/learner/${e.learner_id}">${esc(e.profiles?.full_name)}</a> – ${esc(tName(e))} <span class="small muted">${esc(e.organisations?.name || '')}</span></li>`)}</section>
       <section class="card"><h2 style="margin-top:0">Ready to issue certificate</h2>${list(cert.data, 'No one yet.', (e) =>
@@ -211,16 +211,87 @@ async function learner(id) {
 }
 
 // ---------------- marking ----------------
+const RQ = { q: '', org: '', wb: '', from: '', to: '', group: 'none', page: 1, sel: new Set() };
+const PAGE = 25;
+
 async function reviewQueue() {
   const rows = must(await orgF(sb.from('assignments')
-    .select('id, status, submitted_at, reviewed_at, attempt, workbooks(title), profiles(full_name), enrollments!inner(organisation_id, organisations(name))')
+    .select('id, status, submitted_at, attempt, workbook_id, workbooks(title), profiles(full_name), enrollments!inner(organisation_id, organisations(name))')
     .in('status', ['submitted', 'resubmit']).order('submitted_at'), 'enrollments.organisation_id'));
-  view(`<h1>Review <span class="muted small">· ${esc(await orgName())}</span></h1>
-    <div class="card table-wrap"><table><thead><tr><th>Learner</th><th>Workbook</th><th>Organisation</th><th>Status</th><th>Submitted</th></tr></thead><tbody>
-    ${rows.map((a) => `<tr class="click" data-id="${a.id}"><td>${esc(a.profiles?.full_name)}</td><td>${esc(a.workbooks.title)}${a.attempt > 1 ? ` <span class="small muted">attempt ${a.attempt}</span>` : ''}</td>
-      <td>${esc(a.enrollments.organisations?.name || '')}</td><td>${badge(a.status)}</td><td>${fmtDate(a.submitted_at)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">Nothing to review.</td></tr>'}
-    </tbody></table></div>`);
-  $$('tr.click').forEach((tr) => (tr.onclick = () => go(`#/a/review/${tr.dataset.id}`)));
+  // Auto-marked, all correct: every question is multiple choice / true-false and every answer is correct
+  const subIds = rows.filter((r) => r.status === 'submitted').map((r) => r.id);
+  const [ansR, qR] = await Promise.all([
+    subIds.length ? sb.from('answers').select('assignment_id, is_correct').in('assignment_id', subIds) : { data: [] },
+    sb.from('questions').select('workbook_id, qtype'),
+  ]);
+  const ans = must(ansR), qs = must(qR);
+  const wbInfo = {};
+  qs.forEach((q) => { const w = (wbInfo[q.workbook_id] ||= { n: 0, auto: true }); w.n++; if (!['multiple_choice', 'true_false'].includes(q.qtype)) w.auto = false; });
+  const byA = {};
+  ans.forEach((x) => { const o = (byA[x.assignment_id] ||= { n: 0, ok: 0 }); o.n++; if (x.is_correct === true) o.ok++; });
+  rows.forEach((r) => {
+    const w = wbInfo[r.workbook_id], o = byA[r.id];
+    r.auto = r.status === 'submitted' && !!w && w.n > 0 && w.auto && !!o && o.n === w.n && o.ok === w.n;
+  });
+
+  const orgs = [...new Set(rows.map((r) => r.enrollments.organisations?.name).filter(Boolean))].sort();
+  const wbs = [...new Set(rows.map((r) => r.workbooks.title))].sort();
+  const draw = () => {
+    const q = RQ.q.trim().toLowerCase();
+    let list = rows.filter((r) =>
+      (!q || (r.profiles?.full_name || '').toLowerCase().includes(q)) &&
+      (!RQ.org || r.enrollments.organisations?.name === RQ.org) &&
+      (!RQ.wb || r.workbooks.title === RQ.wb) &&
+      (!RQ.from || (r.submitted_at || '') >= RQ.from) &&
+      (!RQ.to || (r.submitted_at || '').slice(0, 10) <= RQ.to));
+    const pages = Math.max(1, Math.ceil(list.length / PAGE));
+    RQ.page = Math.min(RQ.page, pages);
+    try { sessionStorage.setItem('reviewQueue', JSON.stringify(list.filter((r) => r.status === 'submitted').map((r) => r.id))); } catch {}
+    const shown = list.slice((RQ.page - 1) * PAGE, RQ.page * PAGE);
+    const autoAll = list.filter((r) => r.auto);
+    const tr = (a) => `<tr class="click" data-id="${a.id}"><td>${a.auto ? `<input type="checkbox" class="sel" data-id="${a.id}" ${RQ.sel.has(a.id) ? 'checked' : ''} aria-label="Select ${esc(a.profiles?.full_name)}">` : ''}</td>
+      <td>${esc(a.profiles?.full_name)}</td><td>${esc(a.workbooks.title)}${a.attempt > 1 ? ` <span class="small muted">attempt ${a.attempt}</span>` : ''}</td>
+      <td>${esc(a.enrollments.organisations?.name || '')}</td><td>${badge(a.status)}${a.auto ? ' <span class="badge ok">Auto-marked, all correct</span>' : ''}</td><td>${fmtDate(a.submitted_at)}</td></tr>`;
+    const keyOf = (a) => (RQ.group === 'org' ? a.enrollments.organisations?.name : a.workbooks.title) || 'Other';
+    let body;
+    if (RQ.group === 'none') body = shown.map(tr).join('');
+    else {
+      const g = {}; shown.forEach((a) => (g[keyOf(a)] ||= []).push(a));
+      body = Object.entries(g).map(([k, v]) => `<tr class="grp"><td colspan="6"><b>${esc(k)}</b> <span class="muted small">${v.length} on this page</span></td></tr>${v.map(tr).join('')}`).join('');
+    }
+    $('#rq').innerHTML = `
+      <div class="row" style="gap:.5rem">
+        <input id="fq" placeholder="Search learner" value="${esc(RQ.q)}" style="max-width:200px">
+        <select id="fo" style="max-width:200px"><option value="">All organisations</option>${orgs.map((o) => `<option ${o === RQ.org ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>
+        <select id="fw" style="max-width:240px"><option value="">All workbooks</option>${wbs.map((o) => `<option ${o === RQ.wb ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>
+        <label class="small" style="margin:0">From</label><input id="ff" type="date" value="${RQ.from}" style="max-width:150px">
+        <label class="small" style="margin:0">To</label><input id="ft" type="date" value="${RQ.to}" style="max-width:150px">
+        <select id="fg" style="max-width:180px"><option value="none" ${RQ.group === 'none' ? 'selected' : ''}>No grouping</option><option value="org" ${RQ.group === 'org' ? 'selected' : ''}>Group by organisation</option><option value="wb" ${RQ.group === 'wb' ? 'selected' : ''}>Group by workbook</option></select>
+      </div>
+      ${autoAll.length ? `<div class="notice info" style="margin-top:.75rem"><b>${autoAll.length}</b> submission${autoAll.length === 1 ? '' : 's'} auto-marked with every answer correct (no written answers).
+        <button class="btn small secondary" id="selauto">Select all ${autoAll.length}</button>
+        <button class="btn small ok" id="bulk" ${[...RQ.sel].some((id) => rows.find((r) => r.id === id)) ? '' : 'disabled'}>Mark ${[...RQ.sel].filter((id) => rows.find((r) => r.id === id)).length} selected competent</button></div>` : ''}
+      <div class="card table-wrap" style="margin-top:.75rem"><table><thead><tr><th></th><th>Learner</th><th>Workbook</th><th>Organisation</th><th>Status</th><th>Submitted</th></tr></thead><tbody>
+      ${body || '<tr><td colspan="6" class="muted">Nothing to review.</td></tr>'}</tbody></table></div>
+      <div class="row between"><span class="small muted">${list.length} of ${rows.length} · oldest first</span>
+        <span class="row"><button class="btn small secondary" id="pp" ${RQ.page <= 1 ? 'disabled' : ''}>Previous</button><span class="small">Page ${RQ.page} of ${pages}</span><button class="btn small secondary" id="pn" ${RQ.page >= pages ? 'disabled' : ''}>Next</button></span></div>`;
+    const bind = (id, key, ev = 'onchange') => { $(id)[ev] = (e) => { RQ[key] = e.target.value; RQ.page = 1; draw(); if (key === 'q') { const i = $('#fq'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }; };
+    bind('#fq', 'q', 'oninput'); bind('#fo', 'org'); bind('#fw', 'wb'); bind('#ff', 'from'); bind('#ft', 'to'); bind('#fg', 'group');
+    $('#pp').onclick = () => { RQ.page--; draw(); }; $('#pn').onclick = () => { RQ.page++; draw(); };
+    $$('tr.click').forEach((t) => (t.onclick = (e) => { if (e.target.closest('input')) return; go(`#/a/review/${t.dataset.id}`); }));
+    $$('.sel').forEach((c) => (c.onchange = () => { c.checked ? RQ.sel.add(c.dataset.id) : RQ.sel.delete(c.dataset.id); draw(); }));
+    if ($('#selauto')) $('#selauto').onclick = () => { autoAll.forEach((r) => RQ.sel.add(r.id)); draw(); };
+    if ($('#bulk')) $('#bulk').onclick = async () => {
+      const ids = [...RQ.sel].filter((id) => rows.find((r) => r.id === id && r.auto));
+      if (!ids.length) return;
+      if (!confirm(`Mark ${ids.length} submission${ids.length === 1 ? '' : 's'} competent? Every answer in each was auto-marked correct.`)) return;
+      let done = 0;
+      for (const id of ids) { must(await sb.rpc('finalise_review', { p_assignment: id, p_outcome: 'competent', p_notes: '' })); done++; }
+      RQ.sel.clear(); toast(`${done} marked competent`); reviewQueue();
+    };
+  };
+  view(`<h1>Review <span class="muted small">· ${esc(await orgName())}</span></h1><div id="rq"></div>`);
+  draw();
 }
 
 async function review(id) {
@@ -234,7 +305,10 @@ async function review(id) {
   const byQ = Object.fromEntries(ans.map((x) => [x.question_id, x]));
   const locked = a.status !== 'submitted';
 
-  view(`<p><a href="#/a/learner/${a.profiles.id}">← ${esc(a.profiles.full_name)}</a></p>
+  let qids = []; try { qids = JSON.parse(sessionStorage.getItem('reviewQueue') || '[]'); } catch {}
+  const qi = qids.indexOf(id), prevId = qi > 0 ? qids[qi - 1] : null, nextId = qi >= 0 && qi < qids.length - 1 ? qids[qi + 1] : null;
+  view(`<div class="row between"><span><a href="#/a/review">← Queue</a> &middot; <a href="#/a/learner/${a.profiles.id}">${esc(a.profiles.full_name)}</a></span>
+    ${qi >= 0 ? `<span class="row small">${prevId ? `<a class="btn small secondary" href="#/a/review/${prevId}">Previous</a>` : ''}<span class="muted">${qi + 1} of ${qids.length}</span>${nextId ? `<a class="btn small secondary" href="#/a/review/${nextId}">Next</a>` : ''}</span>` : ''}</div>
     <div class="card"><div class="row between"><h1 style="margin:0">${esc(a.workbooks.title)}</h1>${badge(a.status)}</div>
     <p class="muted">${esc(a.profiles.full_name)} · submitted ${fmtDate(a.submitted_at)} · attempt ${a.attempt} · pass mark ${a.workbooks.pass_percent}%</p>
     ${locked ? `<div class="notice info">This workbook is ${a.status === 'competent' ? 'marked competent' : a.status === 'resubmit' ? 'back with the learner for resubmission' : 'not submitted yet'}. You can still view it${a.status === 'competent' ? ' or re-open it below' : ''}.</div>` : ''}
@@ -278,7 +352,9 @@ async function review(id) {
       if (pct < a.workbooks.pass_percent && !confirm(`Score is ${pct}%, below the ${a.workbooks.pass_percent}% pass mark. Mark competent anyway?`)) return;
     }
     must(await sb.rpc('finalise_review', { p_assignment: id, p_outcome: outcome, p_notes: $('#notes').value }));
-    toast(outcome === 'competent' ? 'Marked competent' : 'Returned to learner'); go(`#/a/learner/${a.profiles.id}`);
+    toast(outcome === 'competent' ? 'Marked competent' : 'Returned to learner');
+    if (qi >= 0) { const rest = qids.filter((x) => x !== id); try { sessionStorage.setItem('reviewQueue', JSON.stringify(rest)); } catch {} return go(rest.length ? `#/a/review/${nextId || rest[Math.max(0, qi - 1)]}` : '#/a/review'); }
+    go(`#/a/learner/${a.profiles.id}`);
   };
   $('#comp') && ($('#comp').onclick = () => finish('competent'));
   $('#resub') && ($('#resub').onclick = () => finish('resubmit'));

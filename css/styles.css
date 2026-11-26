@@ -230,3 +230,5 @@ main.landing { max-width: none; padding: 0; }
 .pwwrap { position: relative; } .pwwrap input { padding-right: 4.2rem; }
 .pwtoggle { position: absolute; right: .35rem; top: 50%; transform: translateY(-50%); background: none; border: 0; color: var(--brand); font: inherit; font-size: .85rem; font-weight: 600; cursor: pointer; padding: .3rem .5rem; border-radius: 6px; }
 .pwtoggle:hover { background: var(--brand-soft); }
+
+tr.grp td { background: var(--brand-soft); }
