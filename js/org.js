@@ -1,4 +1,4 @@
-import { sb, state, BRAND, $, $$, esc, fmtDate, view, go, toast, must, formData, badge } from './app.js';
+import { sb, state, BRAND, $, $$, esc, fmtDate, view, go, toast, must, formData, badge, money } from './app.js';
 
 const reqBadge = (s) => badge(s === 'submitted' ? 'submitted_req' : s);
 const MOD_LABEL = { skipped: 'Skipped', awaiting_activation: 'Awaiting first login', draft: 'Draft', submitted: 'Submitted', under_review: 'Under review' };
@@ -79,12 +79,13 @@ async function requests() {
 
 async function requestEditor(id) {
   const isNew = id === 'new';
-  const [roster, cat, req, items, code] = await Promise.all([
+  const [roster, cat, req, items, code, quotes] = await Promise.all([
     sb.from('roster_learners').select('id,full_name,username').eq('is_active', true).order('full_name'),
     sb.rpc('org_catalogue'),
     isNew ? { data: null } : sb.from('pack_requests').select('*').eq('id', id).single(),
     isNew ? { data: [] } : sb.from('pack_request_items').select('id,roster_id,workbook_id,skipped_reason').eq('request_id', id),
     isNew ? { data: [] } : sb.from('class_codes').select('code,expires_at').eq('request_id', id),
+    isNew ? { data: [] } : sb.from('quotes').select('*').eq('request_id', id).order('version', { ascending: false }),
   ]).then((r) => r.map((x) => must(x)));
   const req0 = req || { title: '', preferred_dates: '', notes: '', status: 'draft' };
   const editable = req0.status === 'draft';
@@ -98,10 +99,24 @@ async function requestEditor(id) {
     }).join('')}</tr>`).join('')}</tbody></table></div>`
     : `<p class="muted">${cat.length ? 'Add learners first, then pick their modules here.' : 'No modules are available to your organisation yet. Please contact the trainer.'}</p>`;
 
+  const q = quotes.find((x) => x.status !== 'superseded');
+  const qExpired = q?.status === 'sent' && new Date(q.valid_until) < new Date();
+  const quoteBlock = !q ? '' : `<section class="card"><div class="row between"><h2 style="margin:0">Quote</h2>${badge(q.status === 'accepted' ? 'accepted' : q.status === 'sent' ? 'quoted' : 'under_review')}</div>
+    <div class="table-wrap"><table><thead><tr><th>Description</th><th>Qty</th><th>Unit (ex GST)</th><th class="right">Total</th></tr></thead><tbody>
+    ${q.lines.map((l) => `<tr><td>${esc(l.description)}</td><td>${l.qty}</td><td>${money(l.unit_cents)}</td><td class="right">${money(Math.round(l.qty * l.unit_cents))}</td></tr>`).join('')}</tbody></table></div>
+    <p class="right" style="margin:.5rem 0 0">Subtotal ${money(q.subtotal_cents)} · GST ${money(q.gst_cents)} · <b>Total ${money(q.total_cents)}</b></p>
+    ${q.payment_terms ? `<h3>Payment terms</h3><p style="margin:0">${esc(q.payment_terms)}</p>` : ''}${q.terms ? `<h3>Terms</h3><p style="margin:0">${esc(q.terms)}</p>` : ''}
+    ${q.status === 'accepted' ? `<div class="notice info">Accepted by <b>${esc(q.accepted_name)}</b> on ${fmtDate(q.accepted_at)}.${q.invoice_number ? ` Invoice ${esc(q.invoice_number)}${q.paid_at ? `, paid ${fmtDate(q.paid_at)}` : ''}.` : ''}</div>`
+      : q.status === 'sent' && !qExpired ? `<p class="small muted">Valid until ${fmtDate(q.valid_until)}.</p>
+        <label for="qname">Your name</label><input id="qname" value="${esc(state.profile.full_name || '')}" style="max-width:22rem">
+        <label class="choice" style="max-width:34rem"><input type="checkbox" id="qagree"> I agree to the price and terms above</label>
+        <div class="row" style="margin-top:.6rem"><button class="btn ok" id="qaccept" disabled>Accept quote</button><button class="btn secondary" id="qdecline">Decline or ask for changes</button></div>`
+      : qExpired ? '<div class="notice">This quote has expired. Please ask the trainer to re-send it.</div>' : ''}</section>`;
   view(`<p><a href="#/o/requests">← Pack requests</a></p>
     <div class="row between"><h1>${isNew ? 'New pack request' : esc(req0.title)}</h1>${isNew ? '' : reqBadge(req0.status)}</div>
     ${req0.admin_note ? `<div class="notice info"><b>Note from the trainer:</b> ${esc(req0.admin_note)}</div>` : ''}
     ${code[0] ? `<div class="notice info">Class code: <b style="letter-spacing:.1em">${esc(code[0].code)}</b> · valid until ${fmtDate(code[0].expires_at)}. Give it to learners on the training day with their username.</div>` : ''}
+    ${quoteBlock}
     ${req0.status === 'approved' && !code[0] ? '<div class="notice">Approved. The class code will appear here shortly.</div>' : ''}
     <form id="f" class="card">
       <label>Title</label><input name="title" required value="${esc(req0.title)}" placeholder="e.g. High intensity supports, February intake" ${editable ? '' : 'disabled'}>
@@ -114,6 +129,18 @@ async function requestEditor(id) {
     ${editable ? `<div class="row"><button class="btn" id="save">Save draft</button><button class="btn ok" id="submit">Submit for review</button>${isNew ? '' : '<button class="btn danger" id="del">Delete</button>'}</div>
       <p class="small muted">Once submitted the trainer reviews it, confirms the quote and dates, then approves it. Learners already finished with a module are skipped automatically.</p>` : ''}`);
 
+  if ($('#qagree')) {
+    $('#qagree').onchange = (e) => { $('#qaccept').disabled = !e.target.checked; };
+    $('#qaccept').onclick = async () => {
+      must(await sb.rpc('org_accept_quote', { p_quote: q.id, p_name: $('#qname').value }), 'Could not accept');
+      toast('Quote accepted. The trainer will issue your class code.'); requestEditor(id);
+    };
+    $('#qdecline').onclick = async () => {
+      const note = prompt('What would you like changed? (optional)');
+      if (note === null) return;
+      must(await sb.rpc('org_decline_quote', { p_quote: q.id, p_note: note || null }), 'Could not send'); toast('Sent back to the trainer'); requestEditor(id);
+    };
+  }
   const saveDraft = async () => {
     const d = formData($('#f'));
     if (!d.title?.trim()) { toast('Add a title first', true); throw new Error('title'); }

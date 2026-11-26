@@ -59,9 +59,10 @@ const STATUS = {
   workbooks: ['Workbooks', 'info'], ready_for_practical: ['Ready for practical', 'warn'],
   practical_complete: ['Practical complete', 'ok'], completed: ['Completed', 'ok'], withdrawn: ['Withdrawn', 'bad'],
   draft: ['Draft', ''], not_yet_competent: ['Not yet competent', 'bad'],
-  submitted_req: ['Submitted', 'info'], under_review: ['Under review', 'warn'], approved: ['Approved', 'ok'],
+  submitted_req: ['Submitted', 'info'], under_review: ['Under review', 'warn'], quoted: ['Quote sent', 'info'], accepted: ['Quote accepted', 'ok'], approved: ['Approved', 'ok'],
   awaiting_activation: ['Awaiting first login', 'warn'], skipped: ['Skipped', ''],
 };
+export const money = (c) => (Number(c || 0) / 100).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' });
 export const badge = (s) => { const [l, c] = STATUS[s] || [s, '']; return `<span class="badge ${c}">${esc(l)}</span>`; };
 
 export function stageSteps(status) {

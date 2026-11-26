@@ -24,3 +24,11 @@ export const BRAND = {
   abn: '',              // optional, e.g. '12 345 678 901'
   logoUrl: '',          // optional, e.g. 'logo.png' placed next to index.html
 };
+
+// Defaults for new quotes. The trainer can edit all of these on each quote.
+export const QUOTE_DEFAULTS = {
+  gst_percent: 10,
+  valid_days: 14,
+  payment_terms: 'Payment is due within 14 days of the invoice date.',
+  terms: 'This quote covers the training listed above. Class codes are issued once the quote is accepted. Prices are in Australian dollars.',
+};

@@ -1,4 +1,5 @@
-import { sb, state, BRAND, $, $$, esc, fmtDate, view, go, toast, must, formData, badge, stageSteps, formatText } from './app.js';
+import { sb, state, BRAND, $, $$, esc, fmtDate, view, go, toast, must, formData, badge, stageSteps, formatText, money } from './app.js';
+import { QUOTE_DEFAULTS } from './config.js';
 
 const orgF = (q, col) => (state.org ? q.eq(col, state.org) : q);
 const orgName = async () => state.org ? must(await sb.from('organisations').select('name').eq('id', state.org).single()).name : 'All organisations';
@@ -44,6 +45,7 @@ export async function route(h) {
   if (h === '#/a/packages') return packages();
   if ((m = h.match(/^#\/a\/package\/([\w-]+)$/))) return packageEditor(m[1]);
   if (h === '#/a/requests') return requestsList();
+  if (h === '#/a/prices') return priceList();
   if ((m = h.match(/^#\/a\/request\/([\w-]+)$/))) return requestDetail(m[1]);
   if (h === '#/a/accounts') return accounts();
   if (h === '#/a/orgs') return orgs();
@@ -372,7 +374,7 @@ async function workbooks() {
   ]);
   const list = rows.filter((w) => availableTo(w.workbook_organisations));
   const n = (x) => x?.[0]?.count ?? 0;
-  view(`<div class="row between"><h1>Workbook library <span class="muted small">· ${esc(await orgName())}</span></h1><a class="btn" href="#/a/workbook/new">New workbook</a></div>
+  view(`<div class="row between"><h1>Workbook library <span class="muted small">· ${esc(await orgName())}</span></h1><span class="row"><a class="btn secondary" href="#/a/prices">Price list</a><a class="btn" href="#/a/workbook/new">New workbook</a></span></div>
     <p class="small muted">Each workbook has Part 1 learning material, Part 2 knowledge questions and the practical skills it covers. ${state.org ? 'Showing workbooks available to this organisation.' : ''}</p>
     <div class="card table-wrap"><table><thead><tr><th>Workbook</th><th>Learning</th><th>Questions</th><th>Practical skills</th><th>In packages</th><th>Assigned</th><th></th></tr></thead><tbody>
     ${list.map((w) => `<tr class="click" data-id="${w.id}">
@@ -716,7 +718,7 @@ async function packageEditor(id) {
 const reqBadge = (st) => badge(st === 'submitted' ? 'submitted_req' : st);
 async function requestsList() {
   const rows = must(await orgF(sb.from('pack_requests').select('id,title,status,created_at,submitted_at,organisations(name),pack_request_items(count)').neq('status', 'draft').order('submitted_at', { ascending: false }), 'organisation_id'));
-  const order = { submitted: 0, under_review: 1, approved: 2 };
+  const order = { submitted: 0, under_review: 1, quoted: 2, accepted: 3, approved: 4 };
   rows.sort((a, b) => (order[a.status] - order[b.status]) || (new Date(b.submitted_at) - new Date(a.submitted_at)));
   view(`<h1>Pack requests <span class="muted small">· ${esc(await orgName())}</span></h1>
     ${rows.length ? `<div class="card table-wrap"><table><thead><tr><th>Organisation</th><th>Request</th><th>Status</th><th>Items</th><th>Submitted</th></tr></thead><tbody>
@@ -724,17 +726,57 @@ async function requestsList() {
       : '<div class="card muted">No submitted requests yet.</div>'}`);
 }
 
+let quoteEdit = null;
+const D = (c) => (Number(c || 0) / 100).toFixed(2);
 async function requestDetail(id) {
-  const [rq, items, code] = await Promise.all([
+  const [rq, items, code, quotes, prices] = await Promise.all([
     sb.from('pack_requests').select('*, organisations(name)').eq('id', id).single(),
-    sb.from('pack_request_items').select('id, skipped_reason, assignment_id, roster_learners(id, full_name, username, profile_id), workbooks(title)').eq('request_id', id),
+    sb.from('pack_request_items').select('id, workbook_id, skipped_reason, assignment_id, roster_learners(id, full_name, username, profile_id), workbooks(title)').eq('request_id', id),
     sb.from('class_codes').select('code, expires_at').eq('request_id', id),
+    sb.from('quotes').select('*').eq('request_id', id).order('version', { ascending: false }),
+    sb.from('workbook_prices').select('workbook_id, price_cents'),
   ]).then((r) => r.map((x) => must(x)));
   const people = new Map();
   items.forEach((i) => { const r = i.roster_learners; if (!people.has(r.id)) people.set(r.id, { ...r, mods: [] }); people.get(r.id).mods.push(i); });
   const locked = rq.status === 'approved';
   const in3 = new Date(Date.now() + 3 * 864e5).toISOString().slice(0, 10);
   const cc = code[0];
+  const live = quotes.find((q) => q.status !== 'superseded');          // latest quote that still counts
+  const expired = live?.status === 'sent' && new Date(live.valid_until) < new Date();
+  const building = !locked && rq.status !== 'accepted' && (!live || live.status === 'draft' || live.status === 'declined' || expired || quoteEdit === id);
+  const priceOf = Object.fromEntries(prices.map((p) => [p.workbook_id, p.price_cents]));
+
+  const quoteCard = () => {
+    if (building) {
+      return `<section class="card" id="qcard"><h2 style="margin-top:0">Quote</h2>
+        ${live?.status === 'declined' ? `<div class="notice">The organisation declined the last quote${live.decline_note ? `: ${esc(live.decline_note)}` : ''}. Revise and send a new one.</div>` : ''}
+        ${expired ? '<div class="notice">The last quote expired. Re-send to start a new 14-day window.</div>' : ''}
+        <div class="table-wrap"><table><thead><tr><th>Description</th><th style="width:5rem">Qty</th><th style="width:8rem">Unit price (ex GST)</th><th class="right" style="width:7rem">Line total</th><th style="width:2rem"></th></tr></thead><tbody id="qlines"></tbody></table></div>
+        <div class="row" style="margin:.6rem 0"><button class="btn small secondary" id="qadd">Add line</button><button class="btn small secondary" id="qfill">Fill from price list</button><a class="small" href="#/a/prices">Edit price list</a></div>
+        <div class="grid" style="margin-top:.5rem">
+          <div><label for="qgst">GST %</label><input id="qgst" type="number" min="0" step="0.1" value="${live?.gst_percent ?? QUOTE_DEFAULTS.gst_percent}"></div>
+          <div><label for="qdays">Valid for (days)</label><input id="qdays" type="number" min="1" max="90" value="${live?.valid_days ?? QUOTE_DEFAULTS.valid_days}"></div>
+        </div>
+        <p id="qtot" class="right" style="margin:.6rem 0 0"></p>
+        <label for="qpay">Payment terms</label><textarea id="qpay" rows="2">${esc(live?.payment_terms ?? QUOTE_DEFAULTS.payment_terms)}</textarea>
+        <label for="qterms">Terms the organisation agrees to</label><textarea id="qterms" rows="3">${esc(live?.terms ?? QUOTE_DEFAULTS.terms)}</textarea>
+        <div class="row" style="margin-top:.9rem"><button class="btn secondary" id="qsave">Save draft</button><button class="btn" id="qsend">Send quote to organisation</button></div>
+        <p class="small muted">A sent quote locks the request until the organisation accepts or declines, and expires after the valid period. Prices on a sent quote never change if the price list does.</p></section>`;
+    }
+    if (!live) return '';
+    const lines = live.lines.map((l) => `<tr><td>${esc(l.description)}</td><td>${l.qty}</td><td>${money(l.unit_cents)}</td><td class="right">${money(Math.round(l.qty * l.unit_cents))}</td></tr>`).join('');
+    const acc = live.status === 'accepted';
+    return `<section class="card"><div class="row between"><h2 style="margin:0">Quote v${live.version}</h2>${badge(acc ? 'accepted' : 'quoted')}</div>
+      <div class="table-wrap"><table><thead><tr><th>Description</th><th>Qty</th><th>Unit</th><th class="right">Total</th></tr></thead><tbody>${lines}</tbody></table></div>
+      <p class="right" style="margin:.5rem 0 0">Subtotal ${money(live.subtotal_cents)} · GST ${money(live.gst_cents)} · <b>Total ${money(live.total_cents)}</b></p>
+      <p class="small muted">${acc ? `Accepted by <b>${esc(live.accepted_name)}</b> on ${fmtDate(live.accepted_at)}` : `Sent ${fmtDate(live.sent_at)}, valid until ${fmtDate(live.valid_until)}. Waiting for the organisation.`}</p>
+      ${acc ? `<h3>Invoice and payment</h3><div class="inline-fields"><div><label for="inv">Invoice number</label><input id="inv" value="${esc(live.invoice_number)}"></div>
+        <div><label for="invd">Invoice date</label><input id="invd" type="date" value="${live.invoice_date || ''}"></div>
+        <div><label for="paid">Paid on</label><input id="paid" type="date" value="${live.paid_at || ''}"></div></div>
+        <button class="btn small secondary" id="paysave" style="margin-top:.6rem">Save invoice details</button>`
+        : !locked ? '<button class="btn small secondary" id="qrevise">Revise and re-send</button>' : ''}</section>`;
+  };
+
   view(`<p><a href="#/a/requests">← Pack requests</a></p>
     <div class="row between"><h1>${esc(rq.title)}</h1>${reqBadge(rq.status)}</div>
     <p class="muted">${esc(rq.organisations?.name)} · submitted ${fmtDate(rq.submitted_at)}${rq.preferred_dates ? ` · preferred dates: ${esc(rq.preferred_dates)}` : ''}</p>
@@ -744,24 +786,81 @@ async function requestDetail(id) {
         ${p.profile_id ? `<button class="btn small secondary" data-reset="${p.id}" data-name="${esc(p.full_name)}" style="margin-left:.5rem">Reset password</button>` : ''}
         <ul style="margin:.2rem 0">${p.mods.map((m) => `<li>${esc(m.workbooks?.title)} ${m.skipped_reason ? `<span class="badge">${esc(m.skipped_reason)}</span>` : m.assignment_id ? '<span class="badge ok">Assigned</span>' : ''}</li>`).join('')}</ul></div>`).join('') || '<p class="muted">No items.</p>'}
     </section>
-    <section class="card"><h2 style="margin-top:0">Review</h2>
-      <label>Note to the organisation (quote, dates, anything to change)</label><textarea id="note" rows="3">${esc(rq.admin_note)}</textarea>
-      ${locked ? `<div class="notice info">Class code: <b style="letter-spacing:.1em">${esc(cc?.code || '…')}</b> · valid until ${fmtDate(cc?.expires_at)}</div>
+    ${quoteCard()}
+    <section class="card"><h2 style="margin-top:0">Review and approval</h2>
+      <label>Note to the organisation (anything to change, dates)</label><textarea id="note" rows="3">${esc(rq.admin_note)}</textarea>
+      ${locked ? `<div class="notice info">Class code: <b style="letter-spacing:.1em">${esc(cc?.code || '…')}</b> · valid until ${fmtDate(cc?.expires_at)}${rq.quote_waived ? ' · quote waived' : ''}</div>
         <div class="row"><label class="small" style="margin:0">New expiry</label><input type="date" id="exp" value="${cc ? new Date(cc.expires_at).toISOString().slice(0, 10) : in3}">
         <button class="btn small secondary" id="extend">Update expiry</button><button class="btn small danger" id="newcode">Issue a new code</button></div>`
-      : `<div class="row" style="margin-top:.8rem"><button class="btn secondary" id="review">Mark under review</button><button class="btn secondary" id="back">Send back to draft</button></div>
+      : `${['quoted', 'accepted'].includes(rq.status) ? '' : '<div class="row" style="margin-top:.8rem"><button class="btn secondary" id="review">Mark under review</button><button class="btn secondary" id="back">Send back to draft</button></div>'}
         <hr style="border:0;border-top:1px solid var(--line)">
-        <div class="row"><label class="small" style="margin:0">Class code valid until</label><input type="date" id="exp" value="${in3}"><button class="btn ok" id="approve">Approve and create class code</button></div>
-        <p class="small muted">Approval creates the enrolments for anyone already activated. New learners get theirs when they activate with the code.</p>`}
+        ${rq.status === 'accepted' ? '' : `<label class="choice" style="max-width:34rem"><input type="checkbox" id="waive"> No quote needed (waive, e.g. demo or no-charge training)</label>`}
+        <div class="row"><label class="small" style="margin:0">Class code valid until</label><input type="date" id="exp" value="${in3}"><button class="btn ok" id="approve" ${rq.status === 'accepted' ? '' : 'disabled'}>Approve and create class code</button></div>
+        <p class="small muted">${rq.status === 'accepted' ? 'The quote is accepted. Approval creates the enrolments for anyone already activated; new learners get theirs when they activate with the code.' : 'The class code is only issued after the organisation accepts a quote, or you waive it.'}</p>`}
     </section>`);
+
   const note = () => $('#note').value.trim() || null;
   const expiry = () => new Date(`${$('#exp').value}T23:59:59+08:00`).toISOString();
   const status = (s, msg) => async () => { must(await sb.rpc('admin_review_request', { p_request: id, p_status: s, p_note: note() })); toast(msg); requestDetail(id); };
+
+  // ----- quote builder -----
+  if (building) {
+    let L = (live?.lines || []).map((l) => ({ ...l }));
+    const calc = () => {
+      const sub = L.reduce((s, l) => s + Math.round((Number(l.qty) || 0) * (Number(l.unit_cents) || 0)), 0);
+      const gst = Math.round(sub * (Number($('#qgst').value) || 0) / 100);
+      $('#qtot').innerHTML = `Subtotal ${money(sub)} · GST ${money(gst)} · <b>Total ${money(sub + gst)}</b>`;
+    };
+    const draw = () => {
+      $('#qlines').innerHTML = L.map((l, i) => `<tr><td><input data-f="description" data-i="${i}" value="${esc(l.description)}" aria-label="Description"></td>
+        <td><input data-f="qty" data-i="${i}" type="number" min="0" step="1" value="${l.qty}" aria-label="Quantity"></td>
+        <td><input data-f="unit" data-i="${i}" type="number" min="0" step="0.01" value="${D(l.unit_cents)}" aria-label="Unit price"></td>
+        <td class="right" id="lt${i}">${money(Math.round(l.qty * l.unit_cents))}</td><td><button class="linkbtn" data-del="${i}" aria-label="Remove line">&times;</button></td></tr>`).join('') || '<tr><td colspan="5" class="muted">No lines yet.</td></tr>';
+      $$('#qlines input').forEach((inp) => (inp.oninput = () => {
+        const l = L[inp.dataset.i];
+        if (inp.dataset.f === 'description') l.description = inp.value;
+        else if (inp.dataset.f === 'qty') l.qty = Number(inp.value);
+        else l.unit_cents = Math.round((Number(inp.value) || 0) * 100);
+        $(`#lt${inp.dataset.i}`).textContent = money(Math.round((l.qty || 0) * (l.unit_cents || 0))); calc();
+      }));
+      $$('[data-del]').forEach((b) => (b.onclick = () => { L.splice(Number(b.dataset.del), 1); draw(); }));
+      calc();
+    };
+    $('#qgst').oninput = calc;
+    $('#qadd').onclick = () => { L.push({ description: '', qty: 1, unit_cents: 0 }); draw(); };
+    $('#qfill').onclick = () => {
+      const by = new Map();
+      items.filter((i) => !i.skipped_reason).forEach((i) => { const o = by.get(i.workbook_id) || { t: i.workbooks?.title, n: 0 }; o.n++; by.set(i.workbook_id, o); });
+      const missing = [];
+      [...by].forEach(([wid, o]) => {
+        if (priceOf[wid] == null) missing.push(o.t);
+        const d = `${o.t} (per person)`; const ex = L.find((l) => l.description === d);
+        if (ex) { ex.qty = o.n; ex.unit_cents = priceOf[wid] ?? ex.unit_cents; } else L.push({ description: d, qty: o.n, unit_cents: priceOf[wid] ?? 0 });
+      });
+      draw(); if (missing.length) toast(`No price set for: ${missing.join(', ')}`, true);
+    };
+    const save = async (send) => {
+      if (!L.length) return toast('Add at least one line', true);
+      must(await sb.rpc('admin_save_quote', { p_request: id, p_lines: L.map((l) => ({ description: String(l.description || '').trim(), qty: Number(l.qty), unit_cents: Number(l.unit_cents) })),
+        p_gst: Number($('#qgst').value) || 0, p_payment_terms: $('#qpay').value, p_terms: $('#qterms').value, p_valid_days: Number($('#qdays').value) || 14, p_send: send }), 'Could not save quote');
+      quoteEdit = null; toast(send ? 'Quote sent to the organisation' : 'Draft saved'); requestDetail(id);
+    };
+    $('#qsave').onclick = () => save(false);
+    $('#qsend').onclick = () => { if (confirm('Send this quote to the organisation? The request will be locked until they respond.')) save(true); };
+    draw();
+  }
+  $('#qrevise') && ($('#qrevise').onclick = () => { quoteEdit = id; requestDetail(id); });
+  $('#paysave') && ($('#paysave').onclick = async () => {
+    must(await sb.rpc('admin_record_payment', { p_quote: live.id, p_invoice: $('#inv').value, p_invoice_date: $('#invd').value || null, p_paid: $('#paid').value || null }), 'Could not save');
+    toast('Invoice details saved'); requestDetail(id);
+  });
+
   if (!locked) {
-    $('#review').onclick = status('under_review', 'Marked under review');
-    $('#back').onclick = status('draft', 'Sent back to the organisation');
+    $('#review') && ($('#review').onclick = status('under_review', 'Marked under review'));
+    $('#back') && ($('#back').onclick = status('draft', 'Sent back to the organisation'));
+    $('#waive') && ($('#waive').onchange = (e) => { $('#approve').disabled = !e.target.checked; });
     $('#approve').onclick = async () => {
-      const c = must(await sb.rpc('approve_pack_request', { p_request: id, p_expires: expiry(), p_note: note() }), 'Could not approve');
+      const c = must(await sb.rpc('approve_pack_request', { p_request: id, p_expires: expiry(), p_note: note(), p_waive: !!$('#waive')?.checked }), 'Could not approve');
       toast(`Approved. Class code ${c}`); requestDetail(id);
     };
   } else {
@@ -773,6 +872,27 @@ async function requestDetail(id) {
     if (!pw) return;
     must(await sb.rpc('reset_learner_password', { p_roster: b.dataset.reset, p_password: pw }), 'Could not reset'); toast('Password reset');
   }));
+}
+
+// ---------------- price list ----------------
+async function priceList() {
+  const [wbs, prices] = await Promise.all([
+    sb.from('workbooks').select('id,title,version').order('title'),
+    sb.from('workbook_prices').select('workbook_id, price_cents'),
+  ]).then((r) => r.map((x) => must(x)));
+  const pm = Object.fromEntries(prices.map((p) => [p.workbook_id, p.price_cents]));
+  view(`<p><a href="#/a/requests">← Pack requests</a></p><h1>Price list</h1>
+    <p class="muted">Price per person per workbook, excluding GST. Used by "Fill from price list" when you build a quote. Changing a price never alters a quote already sent.</p>
+    <div class="card table-wrap"><table><thead><tr><th>Workbook</th><th style="width:11rem">Price (ex GST)</th></tr></thead><tbody>
+    ${wbs.map((w) => `<tr><td>${esc(w.title)} <span class="small muted">v${esc(w.version)}</span></td><td><input type="number" min="0" step="0.01" data-w="${w.id}" value="${pm[w.id] != null ? D(pm[w.id]) : ''}" placeholder="Not set"></td></tr>`).join('')}
+    </tbody></table></div><button class="btn" id="psave">Save prices</button>`);
+  $('#psave').onclick = async () => {
+    const rows = $$('[data-w]').filter((i) => i.value !== '').map((i) => ({ workbook_id: i.dataset.w, price_cents: Math.round(Number(i.value) * 100), updated_at: new Date().toISOString() }));
+    const clear = $$('[data-w]').filter((i) => i.value === '').map((i) => i.dataset.w);
+    if (rows.length) must(await sb.from('workbook_prices').upsert(rows), 'Could not save prices');
+    if (clear.length) must(await sb.from('workbook_prices').delete().in('workbook_id', clear));
+    toast('Prices saved');
+  };
 }
 
 // ---------------- accounts: approve organisation sign-ups ----------------
