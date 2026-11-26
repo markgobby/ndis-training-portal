@@ -197,12 +197,18 @@ export async function createFromParsed(p) {
   const wid = w.id;
   try {
     if (p.outcomes.length) must(await sb.from('outcomes').insert(p.outcomes.map((o, i) => ({ ...o, workbook_id: wid, position: i + 1 }))));
-    for (const part of chunk(p.items.map((it, i) => ({ ...it, workbook_id: wid, position: i + 1 })))) must(await sb.from('learning_items').insert(part));
+    const itemRow = (it, i) => ({ workbook_id: wid, position: i + 1, kind: it.kind, block_type: it.block_type ?? null, section_code: it.section_code ?? null, section_title: it.section_title ?? null,
+      outcome_code: it.outcome_code ?? null, title: it.title ?? null, body: it.body ?? '', image_url: it.image_url ?? null, alt_text: it.alt_text ?? null, reference_source: it.reference_source ?? null,
+      qtype: it.qtype ?? null, options: it.options ?? [], answer: it.answer ?? null, hint: it.hint ?? null, explanation: it.explanation ?? null, explanation_incorrect: it.explanation_incorrect ?? null });
+    for (const part of chunk(p.items.map(itemRow))) must(await sb.from('learning_items').insert(part));
     const qrows = p.questions.map((q, i) => ({ id: crypto.randomUUID(), q, i }));
     for (const part of chunk(qrows)) must(await sb.from('questions').insert(part.map(({ id, q, i }) => ({ id, workbook_id: wid, position: i + 1, prompt: q.prompt,
       qtype: q.qtype, options: q.options, marks: q.marks, critical: q.critical, outcome_code: q.outcome_code, source_section: q.source_section }))));
     for (const part of chunk(qrows)) must(await sb.from('question_keys').insert(part.map(({ id, q }) => ({ question_id: id, ...q.key }))));
-    for (const part of chunk(p.skills.map((s, i) => ({ ...s, workbook_id: wid, package_id: null, position: i + 1 })))) must(await sb.from('competencies').insert(part));
+    const skillRow = (s, i) => ({ workbook_id: wid, package_id: null, position: i + 1, description: s.description, task_group: s.task_group ?? null, outcome_code: s.outcome_code ?? null,
+      criteria: s.criteria ?? null, method: s.method ?? null, conditions: s.conditions ?? null, resources: s.resources ?? null, evidence: s.evidence ?? null,
+      min_observations: s.min_observations ?? 1, critical: !!s.critical, assessor_prompt: s.assessor_prompt ?? null });
+    for (const part of chunk(p.skills.map(skillRow))) must(await sb.from('competencies').insert(part));
   } catch (e) {
     await sb.from('workbooks').delete().eq('id', wid); // cascades, so a failed import leaves nothing behind
     throw e;
