@@ -1,6 +1,6 @@
 import { sb, state, BRAND, $, $$, esc, fmtDate, view, go, toast, must, formData, badge, stageSteps, formatText, money, blockHtml, parseMulti, ansText } from './app.js';
 import { QUOTE_DEFAULTS } from './config.js';
-import { importView, TEMPLATE_URL } from './import.js';
+import { importView, replaceView, TEMPLATE_URL } from './import.js';
 
 const orgF = (q, col) => (state.org ? q.eq(col, state.org) : q);
 const orgName = async () => state.org ? must(await sb.from('organisations').select('name').eq('id', state.org).single()).name : 'All organisations';
@@ -48,6 +48,7 @@ export async function route(h) {
   if (h === '#/a/requests') return requestsList();
   if (h === '#/a/prices') return priceList();
   if (h === '#/a/import') return importView();
+  if ((m = h.match(/^#\/a\/replace\/([\w-]+)$/))) return replaceView(m[1]);
   if ((m = h.match(/^#\/a\/request\/([\w-]+)$/))) return requestDetail(m[1]);
   if (h === '#/a/accounts') return accounts();
   if (h === '#/a/orgs') return orgs();
@@ -377,17 +378,21 @@ async function workbooks() {
   ]);
   const list = rows.filter((w) => availableTo(w.workbook_organisations));
   const n = (x) => x?.[0]?.count ?? 0;
-  view(`<div class="row between"><h1>Workbook library <span class="muted small">· ${esc(await orgName())}</span></h1><span class="row"><a class="btn secondary" href="#/a/prices">Price list</a><a class="btn secondary" href="#/a/workbook/new">New blank workbook</a><a class="btn" href="#/a/import">Import from Excel</a></span></div>
-    <p class="small muted">Each workbook has Part 1 learning material, Part 2 knowledge questions and the practical skills it covers. ${state.org ? 'Showing workbooks available to this organisation.' : ''}</p>
-    <div class="card table-wrap"><table><thead><tr><th>Workbook</th><th>Learning</th><th>Questions</th><th>Practical skills</th><th>In packages</th><th>Assigned</th><th></th></tr></thead><tbody>
-    ${list.map((w) => `<tr class="click" data-id="${w.id}">
+  const row = (w) => `<tr class="click" data-id="${w.id}">
       <td><b>${esc(w.title)}</b> <span class="small muted">v${esc(w.version)}</span> ${w.is_active ? '' : '<span class="badge">Archived</span>'}
         <div class="small muted">${esc(orgList(w.workbook_organisations, orgsById))}</div></td>
       <td>${n(w.learning_items)}</td><td>${n(w.questions)}</td><td>${n(w.competencies)}</td>
       <td class="small">${w.package_workbooks.map((x) => esc(x.packages?.code)).join(', ') || '—'}</td>
       <td>${n(w.assignments)}</td>
-      <td class="right nowrap"><a class="btn small secondary" href="#/a/preview/${w.id}" data-stop>Preview</a></td></tr>`).join('') || '<tr><td colspan="7" class="muted">No workbooks yet.</td></tr>'}
-    </tbody></table></div>`);
+      <td class="right nowrap"><a class="btn small secondary" href="#/a/preview/${w.id}" data-stop>Preview</a></td></tr>`;
+  const live = list.filter((w) => w.is_active), old = list.filter((w) => !w.is_active);
+  view(`<div class="row between"><h1>Workbook library <span class="muted small">· ${esc(await orgName())}</span></h1><span class="row"><a class="btn secondary" href="#/a/prices">Price list</a><a class="btn secondary" href="#/a/workbook/new">New blank workbook</a><a class="btn" href="#/a/import">Import from Excel</a></span></div>
+    <p class="small muted">Each workbook has Part 1 learning material, Part 2 knowledge questions and the practical skills it covers. ${state.org ? 'Showing workbooks available to this organisation.' : ''}</p>
+    <div class="card table-wrap"><table><thead><tr><th>Workbook</th><th>Learning</th><th>Questions</th><th>Practical skills</th><th>In packages</th><th>Assigned</th><th></th></tr></thead><tbody>
+    ${live.map(row).join('') || '<tr><td colspan="7" class="muted">No workbooks yet.</td></tr>'}
+    </tbody></table></div>
+    ${old.length ? `<details class="card" style="margin-top:1rem"><summary><b>Archived workbooks</b> <span class="small muted">· ${old.length} · old versions. Not offered for new learners or packages. Learners already on them can finish, and trainer marking carries on as normal.</span></summary>
+      <div class="table-wrap"><table><thead><tr><th>Workbook</th><th>Learning</th><th>Questions</th><th>Practical skills</th><th>In packages</th><th>Assigned</th><th></th></tr></thead><tbody>${old.map(row).join('')}</tbody></table></div></details>` : ''}`);
   $$('[data-stop]').forEach((a) => (a.onclick = (e) => e.stopPropagation()));
   $$('tr.click').forEach((tr) => (tr.onclick = () => go(`#/a/workbook/${tr.dataset.id}`)));
 }
@@ -543,7 +548,7 @@ async function workbookEditor(id) {
       <label>Description / instructions for learners</label><textarea name="description">${esc(w.description)}</textarea>
       <label class="choice" style="max-width:260px"><input type="checkbox" name="is_active" ${w.is_active ? 'checked' : ''}>Active (can be assigned)</label>
       ${orgPicker(orgsL, wOrgs)}
-      ${!isNew ? `<p><a class="btn small secondary" href="#/a/preview/${id}">Preview as learner</a></p>` : ''}
+      ${!isNew ? `<p class="row"><a class="btn small secondary" href="#/a/preview/${id}">Preview as learner</a><a class="btn small" href="#/a/replace/${id}">Replace with updated template</a></p>` : ''}
       <h2>Part 1 · Learning material</h2>
       <p class="small muted">What the learner needs to know, with optional practice questions. Practice answers are never recorded.</p>
       <div id="lis"></div>
@@ -616,7 +621,10 @@ async function workbookEditor(id) {
     let wid = id;
     if (isNew || asNew) {
       if (asNew) { rec.version = prompt('Version number for the new copy?', String((parseFloat(w.version) || 1) + 1)) || rec.version; }
-      wid = must(await sb.from('workbooks').insert(rec).select('id').single()).id;
+      if (asNew) must(await sb.from('workbooks').update({ is_active: false }).eq('id', id)); // archive the old version first so the Workbook_ID stays unique among active workbooks
+      const ins = await sb.from('workbooks').insert({ ...rec, is_active: true }).select('id').single();
+      if (ins.error) { if (asNew) await sb.from('workbooks').update({ is_active: true }).eq('id', id); must(ins); }
+      wid = ins.data.id;
       if (asNew && outcomes.length) must(await sb.from('outcomes').insert(outcomes.map((o) => ({ workbook_id: wid, position: o.position, code: o.code, description: o.description, assessed_by: o.assessed_by }))));
       if (asNew) { qs = qs.map((q) => ({ ...q, id: uuid() })); lis = lis.map((x) => ({ ...x, id: uuid() })); }
     } else {
@@ -655,10 +663,8 @@ async function workbookEditor(id) {
       }
     }
     await saveOrgLinks('workbook_organisations', 'workbook_id', wid, readOrgPicker());
-    if (asNew && confirm('New version saved. Archive the old version so it is no longer assigned to new learners?')) {
-      must(await sb.from('workbooks').update({ is_active: false }).eq('id', id));
-      toast('Remember to swap the new version into your packages');
-    } else toast('Workbook saved');
+    if (asNew) toast('New version saved. The old version is archived. Swap the new one into your packages.');
+    else toast('Workbook saved');
     go(`#/a/workbook/${wid}`);
   };
   $('#wf').onsubmit = (e) => { e.preventDefault(); save(false); };
