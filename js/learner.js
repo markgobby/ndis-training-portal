@@ -1,4 +1,4 @@
-import { sb, state, $, $$, esc, fmtDate, view, go, toast, must, formData, badge, ratingInput, formatText } from './app.js';
+import { sb, state, $, $$, esc, fmtDate, view, go, toast, must, formData, badge, ratingInput, formatText, blockHtml, parseMulti, ansText } from './app.js';
 
 const tName = (e) => e.title || e.packages?.name || 'Training';
 const partTabs = (id, active, hasLearning) => hasLearning ? `<div class="parts" role="tablist">
@@ -38,14 +38,17 @@ async function learn(id) {
   const a = must(await sb.from('assignments').select('*, workbooks(title, version, description)').eq('id', id).single());
   const items = must(await sb.from('learning_items').select('*').eq('workbook_id', a.workbook_id).order('position'));
   let pn = 0;
-  const html = items.map((it) => {
-    if (it.kind === 'content') return `<section class="learn-block">${it.title ? `<h2>${esc(it.title)}</h2>` : ''}${formatText(it.body)}</section>`;
+  const html = items.map((it, ix) => {
+    if (it.kind === 'content') return blockHtml(it, items[ix - 1]);
     pn++;
     const opts = it.qtype === 'true_false' ? ['True', 'False'] : it.options || [];
+    const multi = it.qtype === 'multi_select';
     return `<section class="practice" data-p="${it.id}">
       <div class="small" style="font-weight:700;color:var(--brand)">Check your understanding ${pn}${it.title ? ' · ' + esc(it.title) : ''}</div>
       <div style="margin:.3rem 0">${esc(it.body).replace(/\n/g, '<br>')}</div>
-      ${opts.map((o) => `<label class="choice"><input type="radio" name="p_${it.id}" value="${esc(o)}">${esc(o)}</label>`).join('')}
+      ${multi ? '<div class="small muted">Select all that apply.</div>' : ''}
+      ${opts.map((o) => `<label class="choice"><input type="${multi ? 'checkbox' : 'radio'}" name="p_${it.id}" value="${esc(o)}">${esc(o)}</label>`).join('')}
+      ${it.hint ? `<details class="small"><summary>Hint</summary>${esc(it.hint)}</details>` : ''}
       <button type="button" class="btn small secondary" data-check="${it.id}">Check answer</button>
       <div class="pfb" aria-live="polite"></div></section>`;
   }).join('');
@@ -79,11 +82,14 @@ async function learn(id) {
   $$('[data-check]').forEach((b) => (b.onclick = () => {
     const it = items.find((x) => x.id === b.dataset.check);
     const box = b.parentElement.querySelector('.pfb');
-    const pick = $(`[name="p_${it.id}"]:checked`);
-    if (!pick) { box.innerHTML = '<div class="notice small">Choose an answer first.</div>'; return; }
-    const right = (it.answer || '').trim().toLowerCase() === pick.value.trim().toLowerCase();
+    const picks = $$(`[name="p_${it.id}"]:checked`).map((x) => x.value);
+    if (!picks.length) { box.innerHTML = '<div class="notice small">Choose an answer first.</div>'; return; }
+    const right = it.qtype === 'multi_select'
+      ? (() => { const k = parseMulti(it.answer) || []; return k.length === picks.length && k.every((x) => picks.includes(x)); })()
+      : (it.answer || '').trim().toLowerCase() === picks[0].trim().toLowerCase();
+    const fb = right ? it.explanation : (it.explanation_incorrect || it.explanation);
     box.innerHTML = `<div class="notice ${right ? 'info' : 'bad'} small"><b>${right ? 'Correct.' : 'Not quite.'}</b>
-      ${right ? '' : `The answer is <b>${esc(it.answer)}</b>.`} ${it.explanation ? esc(it.explanation) : ''}</div>`;
+      ${right ? '' : `The answer is <b>${esc(ansText(it.answer))}</b>.`} ${fb ? esc(fb) : ''}</div>`;
     answered.add(it.id); refreshAck();
   }));
   $('#done') && ($('#done').onclick = async () => {
@@ -222,6 +228,12 @@ async function workbook(id) {
   const editable = ['not_started', 'in_progress', 'resubmit'].includes(a.status);
   let lastSection = null;
 
+  if (a.workbooks.randomise && editable) { // stable shuffle per learner and attempt, so the order doesn't jump on reload
+    let h = 0; for (const ch of `${id}:${a.attempt}`) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    const rnd = () => { h = (h * 1664525 + 1013904223) >>> 0; return h / 4294967296; };
+    for (let i = qs.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [qs[i], qs[j]] = [qs[j], qs[i]]; }
+  }
+  const attemptsLeft = a.workbooks.max_attempts ? Math.max(a.workbooks.max_attempts - (a.attempt || 1) + 1, 0) : null;
   const qHtml = qs.map((q, i) => {
     const an = byQ[q.id] || {};
     const val = an.response ?? '';
@@ -229,7 +241,9 @@ async function workbook(id) {
     lastSection = q.section || lastSection;
     let input;
     const nm = `q_${q.id}`;
-    if (!editable) input = `<div class="response">${esc(val) || '<span class="muted">No answer</span>'}</div>`;
+    const mval = q.qtype === 'multi_select' ? (parseMulti(val) || []) : [];
+    if (!editable) input = `<div class="response">${esc(ansText(val)) || '<span class="muted">No answer</span>'}</div>`;
+    else if (q.qtype === 'multi_select') input = `<div class="small muted">Select all that apply.</div>` + (q.options || []).map((o) => `<label class="choice"><input type="checkbox" name="${nm}" value="${esc(o)}" ${mval.includes(o) ? 'checked' : ''}>${esc(o)}</label>`).join('');
     else if (q.qtype === 'multiple_choice' || q.qtype === 'true_false') {
       const opts = q.qtype === 'true_false' ? ['True', 'False'] : q.options || [];
       input = opts.map((o) => `<label class="choice"><input type="radio" name="${nm}" value="${esc(o)}" ${o === val ? 'checked' : ''}>${esc(o)}</label>`).join('');
@@ -244,7 +258,7 @@ async function workbook(id) {
 
   view(`<p><a href="#/">← Back</a></p>
     <div class="card"><div class="row between"><h1 style="margin:0">${esc(a.workbooks.title)}</h1>${badge(a.status)}</div>
-      <p class="muted">Version ${esc(a.workbooks.version)}${a.attempt > 1 ? ` · Attempt ${a.attempt}` : ''}</p>
+      <p class="muted">Version ${esc(a.workbooks.version)}${a.attempt > 1 ? ` · Attempt ${a.attempt}` : ''}${attemptsLeft !== null && editable ? ` · ${attemptsLeft} attempt${attemptsLeft === 1 ? '' : 's'} left before you need to see your assessor` : ''}</p>
       ${partTabs(id, 'assess', hasLearning)}
       ${hasLearning && !a.learning_done_at && editable ? `<div class="notice">Please work through <a href="#/wb/${id}/learn">Part 1 · Learning</a> before you start the assessment.</div>` : ''}
       ${a.workbooks.description ? `<p>${esc(a.workbooks.description)}</p>` : ''}
@@ -261,6 +275,7 @@ async function workbook(id) {
     const out = {};
     for (const q of qs) {
       const els = $$(`[name="q_${q.id}"]`);
+      if (q.qtype === 'multi_select') { const v = els.filter((x) => x.checked).map((x) => x.value); out[q.id] = v.length ? JSON.stringify(v) : ''; continue; }
       const el = els.find((x) => x.type !== 'radio' || x.checked);
       out[q.id] = el ? el.value : '';
     }

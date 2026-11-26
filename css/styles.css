@@ -357,3 +357,15 @@ body.has-side #sidebar { position: fixed; top: 52px; left: 0; bottom: 0; width: 
   body.has-side #sidebar { z-index: 25; }
 }
 @media print { body { padding-top: 0; } body.has-side #shell { padding-left: 0; } }
+
+/* ---- workbook import + reading blocks ---- */
+.importbtn { display:flex; flex-direction:column; gap:.2rem; align-items:flex-start; margin:0 0 1rem; padding:1.1rem 1.4rem; background:#0f7c86; color:#fff; border-radius:6px; text-decoration:none; border:1px solid #0b3552; }
+.importbtn b { font-size:1.15rem; }
+.importbtn span { font-size:.9rem; opacity:.92; }
+.importbtn:hover { background:#0b6770; text-decoration:none; }
+.callout { border-left:4px solid #0f7c86; background:#eef6f7; padding:.7rem 1rem; border-radius:4px; margin:.8rem 0; }
+.callout > b { display:block; font-size:.8rem; text-transform:uppercase; letter-spacing:.04em; color:#0b3552; margin-bottom:.2rem; }
+.callout.scenario { border-left-color:#7a5c00; background:#fbf6e6; }
+.sec-title { margin-top:1.8rem; padding-top:.8rem; border-top:1px solid #dbe3ea; }
+.learn-block figure { margin:1rem 0; } .learn-block img { max-width:100%; height:auto; border-radius:4px; }
+.notice.error { border-left:4px solid #b3261e; background:#fdf0ef; }

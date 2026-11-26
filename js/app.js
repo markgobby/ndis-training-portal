@@ -37,6 +37,26 @@ export function must(res, label = 'Something went wrong') {
 }
 // Simple, safe formatting for learning text: blank line = new paragraph,
 // lines starting "- " = bullet list, "## " = sub-heading, **bold**.
+// multi-select answers/keys are stored as a JSON array of option texts
+export const parseMulti = (s) => { try { const a = JSON.parse(s); return Array.isArray(a) ? a : null; } catch { return null; } };
+export const ansText = (s) => { const a = parseMulti(s); return a ? a.join(' · ') : (s ?? ''); };
+// one reading block (content item) as the learner sees it; prev = previous item, to show a section title when it changes
+export function blockHtml(it, prev) {
+  const sec = it.section_title && it.section_title !== prev?.section_title ? `<h2 class="sec-title">${esc(it.section_title)}</h2>` : '';
+  const src = it.reference_source ? `<div class="small muted">Source: ${esc(it.reference_source)}</div>` : '';
+  let body;
+  switch (it.block_type) {
+    case 'heading': body = `<h3>${esc(it.title || '')}</h3>`; break;
+    case 'callout': body = `<div class="callout"><b>Important</b>${formatText(it.body)}</div>`; break;
+    case 'scenario': body = `<div class="callout scenario"><b>Scenario</b>${formatText(it.body)}</div>`; break;
+    case 'image': body = /^https?:\/\//i.test(it.image_url || '')
+      ? `<figure><img src="${esc(it.image_url)}" alt="${esc(it.alt_text || '')}" loading="lazy"><figcaption class="small muted">${esc(it.alt_text || '')}</figcaption></figure>`
+      : `<p class="muted small">[Image: ${esc(it.alt_text || 'no description')}]</p>`; break;
+    default: body = `${it.title ? `<h3>${esc(it.title)}</h3>` : ''}${formatText(it.body)}`;
+  }
+  return `${sec}<section class="learn-block">${body}${src}</section>`;
+}
+
 export function formatText(src) {
   const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   let out = '', list = [];

@@ -1,5 +1,6 @@
-import { sb, state, BRAND, $, $$, esc, fmtDate, view, go, toast, must, formData, badge, stageSteps, formatText, money } from './app.js';
+import { sb, state, BRAND, $, $$, esc, fmtDate, view, go, toast, must, formData, badge, stageSteps, formatText, money, blockHtml, parseMulti, ansText } from './app.js';
 import { QUOTE_DEFAULTS } from './config.js';
+import { importView, TEMPLATE_URL } from './import.js';
 
 const orgF = (q, col) => (state.org ? q.eq(col, state.org) : q);
 const orgName = async () => state.org ? must(await sb.from('organisations').select('name').eq('id', state.org).single()).name : 'All organisations';
@@ -46,6 +47,7 @@ export async function route(h) {
   if ((m = h.match(/^#\/a\/package\/([\w-]+)$/))) return packageEditor(m[1]);
   if (h === '#/a/requests') return requestsList();
   if (h === '#/a/prices') return priceList();
+  if (h === '#/a/import') return importView();
   if ((m = h.match(/^#\/a\/request\/([\w-]+)$/))) return requestDetail(m[1]);
   if (h === '#/a/accounts') return accounts();
   if (h === '#/a/orgs') return orgs();
@@ -228,7 +230,7 @@ async function reviewQueue() {
   ]);
   const ans = must(ansR), qs = must(qR);
   const wbInfo = {};
-  qs.forEach((q) => { const w = (wbInfo[q.workbook_id] ||= { n: 0, auto: true }); w.n++; if (!['multiple_choice', 'true_false'].includes(q.qtype)) w.auto = false; });
+  qs.forEach((q) => { const w = (wbInfo[q.workbook_id] ||= { n: 0, auto: true }); w.n++; if (!['multiple_choice', 'true_false', 'multi_select'].includes(q.qtype)) w.auto = false; });
   const byA = {};
   ans.forEach((x) => { const o = (byA[x.assignment_id] ||= { n: 0, ok: 0 }); o.n++; if (x.is_correct === true) o.ok++; });
   rows.forEach((r) => {
@@ -318,9 +320,10 @@ async function review(id) {
     ${qs.map((q, i) => {
       const an = byQ[q.id] || {}; const key = k[q.id] || {};
       return `<div class="question" data-ans="${an.id || ''}">
-        <div><span class="qnum">Q${i + 1}.</span> ${esc(q.prompt).replace(/\n/g, '<br>')} <span class="small muted">(${q.marks} mark${q.marks === 1 ? '' : 's'})</span></div>
-        <div class="response" style="margin:.4rem 0">${esc(an.response) || '<span class="muted">No answer</span>'}</div>
-        ${key.correct_answer ? `<div class="small"><b>Expected:</b> ${esc(key.correct_answer)}</div>` : ''}
+        <div><span class="qnum">Q${i + 1}.</span> ${esc(q.prompt).replace(/\n/g, '<br>')} <span class="small muted">(${q.marks} mark${q.marks === 1 ? '' : 's'})</span>${q.critical ? ' <span class="badge bad">Critical</span>' : ''}</div>
+        <div class="response" style="margin:.4rem 0">${esc(ansText(an.response)) || '<span class="muted">No answer</span>'}</div>
+        ${key.correct_answer ? `<div class="small"><b>Expected:</b> ${esc(ansText(key.correct_answer))}</div>` : ''}
+        ${key.feedback ? `<div class="small muted"><b>Feedback note:</b> ${esc(key.feedback)}</div>` : ''}
         ${key.marking_guide ? `<div class="small muted"><b>Marking guide:</b> ${esc(key.marking_guide)}</div>` : ''}
         ${an.id ? `<div class="row" style="margin-top:.4rem">
           <label class="choice" style="margin:0"><input type="radio" name="c_${an.id}" value="1" ${an.is_correct === true ? 'checked' : ''} ${locked ? 'disabled' : ''}>Satisfactory</label>
@@ -374,7 +377,8 @@ async function workbooks() {
   ]);
   const list = rows.filter((w) => availableTo(w.workbook_organisations));
   const n = (x) => x?.[0]?.count ?? 0;
-  view(`<div class="row between"><h1>Workbook library <span class="muted small">· ${esc(await orgName())}</span></h1><span class="row"><a class="btn secondary" href="#/a/prices">Price list</a><a class="btn" href="#/a/workbook/new">New workbook</a></span></div>
+  view(`<div class="row between"><h1>Workbook library <span class="muted small">· ${esc(await orgName())}</span></h1><span class="row"><a class="btn secondary" href="#/a/prices">Price list</a><a class="btn secondary" href="#/a/workbook/new">New blank workbook</a></span></div>
+    <a class="importbtn" href="#/a/import"><b>Import workbook from Excel</b><span>Upload a completed copy of Mark's template. You'll see a preview before anything is saved.</span></a>
     <p class="small muted">Each workbook has Part 1 learning material, Part 2 knowledge questions and the practical skills it covers. ${state.org ? 'Showing workbooks available to this organisation.' : ''}</p>
     <div class="card table-wrap"><table><thead><tr><th>Workbook</th><th>Learning</th><th>Questions</th><th>Practical skills</th><th>In packages</th><th>Assigned</th><th></th></tr></thead><tbody>
     ${list.map((w) => `<tr class="click" data-id="${w.id}">
@@ -401,15 +405,15 @@ async function preview(id) {
   view(`<div class="row"><a href="#/a/workbook/${id}">← Edit workbook</a><span class="badge warn">Preview – nothing is saved</span></div>
     <div class="card"><h1>${esc(w.title)}</h1>
     <h2>Part 1 · Learning</h2>
-    ${items.map((it) => it.kind === 'content' ? `<section class="learn-block">${it.title ? `<h2>${esc(it.title)}</h2>` : ''}${formatText(it.body)}</section>`
+    ${items.map((it, ix) => it.kind === 'content' ? blockHtml(it, items[ix - 1])
       : `<section class="practice"><div class="small" style="font-weight:700;color:var(--brand)">Check your understanding ${++pn}</div><div>${esc(it.body)}</div>
-        <ul>${(it.qtype === 'true_false' ? ['True', 'False'] : it.options).map((o) => `<li>${esc(o)}${o === it.answer ? ' ✓' : ''}</li>`).join('')}</ul>
+        <ul>${(it.qtype === 'true_false' ? ['True', 'False'] : it.options).map((o) => `<li>${esc(o)}${(it.qtype === 'multi_select' ? (parseMulti(it.answer) || []).includes(o) : o === it.answer) ? ' ✓' : ''}</li>`).join('')}</ul>
         ${it.explanation ? `<div class="small muted">${esc(it.explanation)}</div>` : ''}</section>`).join('') || '<p class="muted">No learning material.</p>'}
     <h2>Part 2 · Knowledge assessment</h2>
-    ${qs.map((q, i) => `<div class="question"><span class="qnum">Q${i + 1}.</span> ${esc(q.prompt)} <span class="small muted">(${q.qtype.replace('_', ' ')}, ${q.marks} mark${q.marks === 1 ? '' : 's'})</span>
-      ${q.qtype === 'multiple_choice' ? `<ul>${q.options.map((o) => `<li>${esc(o)}</li>`).join('')}</ul>` : ''}</div>`).join('') || '<p class="muted">No questions.</p>'}
+    ${qs.map((q, i) => `<div class="question"><span class="qnum">Q${i + 1}.</span> ${esc(q.prompt)} <span class="small muted">(${q.qtype.replace('_', ' ')}, ${q.marks} mark${q.marks === 1 ? '' : 's'})</span>${q.critical ? ' <span class="badge bad">Critical</span>' : ''}
+      ${['multiple_choice', 'multi_select'].includes(q.qtype) ? `<ul>${q.options.map((o) => `<li>${esc(o)}</li>`).join('')}</ul>` : ''}</div>`).join('') || '<p class="muted">No questions.</p>'}
     <h2>Practical skills assessed</h2>
-    ${skills.length ? `<ol>${skills.map((c) => `<li>${esc(c.description)}</li>`).join('')}</ol>` : '<p class="muted">None linked to this workbook.</p>'}
+    ${skills.length ? `<ol>${skills.map((c) => `<li>${esc(c.description)}${c.critical ? ' <span class="badge bad">Critical</span>' : ''}${c.criteria ? `<div class="small muted">${esc(c.criteria)}</div>` : ''}</li>`).join('')}</ol>` : '<p class="muted">None linked to this workbook.</p>'}
     </div>`);
 }
 
@@ -429,14 +433,15 @@ function parseCSV(text) {
 
 async function workbookEditor(id) {
   const isNew = id === 'new';
-  let w = { title: '', description: '', version: '1.0', pass_percent: 100, is_active: true }, qs = [], used = 0, lis = [], skills = [], wOrgs = [];
+  let w = { title: '', description: '', version: '1.0', pass_percent: 100, is_active: true }, qs = [], used = 0, lis = [], skills = [], wOrgs = [], outcomes = [];
   const orgsL = must(await sb.from('organisations').select('id,name').order('name'));
   if (!isNew) {
     w = must(await sb.from('workbooks').select('*').eq('id', id).single());
     const raw = must(await sb.from('questions').select('*').eq('workbook_id', id).order('position'));
     const keys = must(await sb.from('question_keys').select('*').in('question_id', raw.map((q) => q.id).concat(uuid())));
     const km = Object.fromEntries(keys.map((k) => [k.question_id, k]));
-    qs = raw.map((q) => ({ ...q, correct_answer: km[q.id]?.correct_answer || '', marking_guide: km[q.id]?.marking_guide || '' }));
+    qs = raw.map((q) => ({ ...q, correct_answer: km[q.id]?.correct_answer || '', marking_guide: km[q.id]?.marking_guide || '', feedback: km[q.id]?.feedback || '' }));
+    outcomes = must(await sb.from('outcomes').select('*').eq('workbook_id', id).order('position'));
     used = (await sb.from('assignments').select('id', { count: 'exact', head: true }).eq('workbook_id', id).neq('status', 'not_started')).count || 0;
     lis = must(await sb.from('learning_items').select('*').eq('workbook_id', id).order('position'));
     skills = must(await sb.from('competencies').select('*').eq('workbook_id', id).order('position'));
@@ -448,17 +453,23 @@ async function workbookEditor(id) {
   // ----- Part 1: learning material editor -----
   const liBlock = (it, i) => it.kind === 'content' ? `<div class="qedit learn-item" data-li="${it.id}" data-kind="content">
       <div class="row between"><b>Information section</b>${liBtns(i)}</div>
+      ${it.block_type ? `<div class="small muted">${it.section_title ? esc(it.section_title) + ' · ' : ''}${esc(it.block_type)} block${it.outcome_code ? ' · outcome ' + esc(it.outcome_code) : ''}</div>` : ''}
       <label>Heading</label><input data-f="title" value="${esc(it.title)}">
       <label>Text</label><textarea data-f="body" style="min-height:9rem">${esc(it.body)}</textarea>
+      ${it.block_type === 'image' ? `<label>Image link (https://…)</label><input data-f="image_url" value="${esc(it.image_url)}"><label>Description for screen readers</label><input data-f="alt_text" value="${esc(it.alt_text)}">` : ''}
       <div class="small muted">Blank line = new paragraph · start a line with "- " for bullet points · **bold** · "## " for a sub-heading</div>
     </div>` : `<div class="qedit learn-item practice-item" data-li="${it.id}" data-kind="practice">
       <div class="row between"><b>Practice question (not recorded)</b>${liBtns(i)}</div>
-      <div class="inline-fields"><div><label>Type</label><select data-f="qtype">${[['multiple_choice', 'Multiple choice'], ['true_false', 'True / False']]
+      <div class="inline-fields"><div><label>Type</label><select data-f="qtype">${[['multiple_choice', 'Multiple choice'], ['multi_select', 'Multi-select'], ['true_false', 'True / False']]
         .map(([v, l]) => `<option value="${v}" ${it.qtype === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div>
       <label>Question</label><textarea data-f="body" style="min-height:3.5rem">${esc(it.body)}</textarea>
       <div ${it.qtype === 'true_false' ? 'hidden' : ''}><label>Options (one per line)</label><textarea data-f="options" style="min-height:4rem">${esc((it.options || []).join('\n'))}</textarea></div>
-      <label>Correct answer</label><input data-f="answer" value="${esc(it.answer)}">
-      <label>Explanation shown after they check</label><input data-f="explanation" value="${esc(it.explanation)}">
+      ${it.qtype === 'multi_select'
+        ? `<label>Correct answers (one per line, matching the options exactly)</label><textarea data-f="answer" style="min-height:3.5rem">${esc((parseMulti(it.answer) || []).join('\n'))}</textarea>`
+        : `<label>Correct answer</label><input data-f="answer" value="${esc(it.answer)}">`}
+      <label>Feedback when correct</label><input data-f="explanation" value="${esc(it.explanation)}">
+      <label>Feedback when incorrect (optional)</label><input data-f="explanation_incorrect" value="${esc(it.explanation_incorrect)}">
+      <label>Hint (optional)</label><input data-f="hint" value="${esc(it.hint)}">
     </div>`;
   const liBtns = (i) => `<div class="row"><button type="button" class="btn small secondary" data-liup="${i}" aria-label="Move up">↑</button>
       <button type="button" class="btn small secondary" data-lidown="${i}" aria-label="Move down">↓</button>
@@ -466,9 +477,14 @@ async function workbookEditor(id) {
   const readLi = () => $$('[data-li]').map((el) => {
     const g = (f) => el.querySelector(`[data-f="${f}"]`)?.value ?? '';
     const kind = el.dataset.kind;
-    return kind === 'content' ? { id: el.dataset.li, kind, title: g('title').trim(), body: g('body') }
-      : { id: el.dataset.li, kind, qtype: g('qtype'), body: g('body').trim(), options: g('options').split('\n').map((x) => x.trim()).filter(Boolean),
-          answer: g('answer').trim(), explanation: g('explanation').trim() };
+    const prev = lis.find((x) => x.id === el.dataset.li) || {};
+    const lines = (f) => g(f).split('\n').map((x) => x.trim()).filter(Boolean);
+    if (kind === 'content') return { ...prev, id: el.dataset.li, kind, title: g('title').trim(), body: g('body'),
+      ...(prev.block_type === 'image' ? { image_url: g('image_url').trim() || null, alt_text: g('alt_text').trim() || null } : {}) };
+    const qtype = g('qtype');
+    return { ...prev, id: el.dataset.li, kind, qtype, body: g('body').trim(), options: lines('options'),
+      answer: qtype === 'multi_select' ? JSON.stringify(lines('answer')) : g('answer').trim(), explanation: g('explanation').trim(),
+      explanation_incorrect: g('explanation_incorrect').trim() || null, hint: g('hint').trim() || null };
   });
   const drawLi = () => {
     $('#lis').innerHTML = lis.map(liBlock).join('') || '<p class="muted">No learning material yet. Learners will go straight to the knowledge assessment.</p>';
@@ -484,22 +500,28 @@ async function workbookEditor(id) {
       <button type="button" class="btn small secondary" data-down="${i}" aria-label="Move down">↓</button>
       <button type="button" class="btn small danger" data-del="${i}">Delete</button></div></div>
     <div class="inline-fields">
-      <div><label>Type</label><select data-f="qtype">${[['short', 'Short answer'], ['long', 'Long answer'], ['multiple_choice', 'Multiple choice'], ['true_false', 'True / False']]
+      <div><label>Type</label><select data-f="qtype">${[['short', 'Short answer'], ['long', 'Long answer'], ['multiple_choice', 'Multiple choice'], ['multi_select', 'Multi-select'], ['true_false', 'True / False']]
         .map(([v, l]) => `<option value="${v}" ${q.qtype === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
       <div><label>Marks</label><input type="number" min="0" data-f="marks" value="${q.marks}"></div>
       <div><label>Section (optional)</label><input data-f="section" value="${esc(q.section)}"></div>
     </div>
+    <label class="choice" style="max-width:420px"><input type="checkbox" data-f="critical" ${q.critical ? 'checked' : ''}>Critical: the learner must answer this correctly to be competent</label>
     <label>Question</label><textarea data-f="prompt" style="min-height:4rem">${esc(q.prompt)}</textarea>
-    <div ${q.qtype === 'multiple_choice' ? '' : 'hidden'} data-show="mc"><label>Options (one per line)</label><textarea data-f="options" style="min-height:4rem">${esc((q.options || []).join('\n'))}</textarea></div>
-    <label>${['multiple_choice', 'true_false'].includes(q.qtype) ? 'Correct answer (must match an option exactly – auto-marked)' : 'Model answer (shown only to you)'}</label>
-    <input data-f="correct_answer" value="${esc(q.correct_answer)}">
+    <div ${['multiple_choice', 'multi_select'].includes(q.qtype) ? '' : 'hidden'} data-show="mc"><label>Options (one per line)</label><textarea data-f="options" style="min-height:4rem">${esc((q.options || []).join('\n'))}</textarea></div>
+    ${q.qtype === 'multi_select'
+      ? `<label>Correct answers (one per line, matching the options exactly – auto-marked all-and-only)</label><textarea data-f="correct_answer" style="min-height:3.5rem">${esc((parseMulti(q.correct_answer) || []).join('\n'))}</textarea>`
+      : `<label>${['multiple_choice', 'true_false'].includes(q.qtype) ? 'Correct answer (must match an option exactly – auto-marked)' : 'Model answer (shown only to you)'}</label>
+    <input data-f="correct_answer" value="${esc(q.correct_answer)}">`}
     <label>Marking guide (optional, only you see this)</label><input data-f="marking_guide" value="${esc(q.marking_guide)}">
   </div>`;
 
   const readQs = () => $$('[data-q]').map((el) => {
     const g = (f) => el.querySelector(`[data-f="${f}"]`).value;
-    return { id: el.dataset.q, qtype: g('qtype'), marks: +g('marks') || 0, section: g('section').trim() || null, prompt: g('prompt').trim(),
-      options: g('options').split('\n').map((s) => s.trim()).filter(Boolean), correct_answer: g('correct_answer').trim(), marking_guide: g('marking_guide').trim() };
+    const prev = qs.find((x) => x.id === el.dataset.q) || {};
+    const qtype = g('qtype');
+    const ca = qtype === 'multi_select' ? JSON.stringify(g('correct_answer').split('\n').map((s) => s.trim()).filter(Boolean)) : g('correct_answer').trim();
+    return { ...prev, id: el.dataset.q, qtype, marks: +g('marks') || 0, section: g('section').trim() || null, prompt: g('prompt').trim(), critical: el.querySelector('[data-f="critical"]').checked,
+      options: g('options').split('\n').map((s) => s.trim()).filter(Boolean), correct_answer: ca, marking_guide: g('marking_guide').trim() };
   });
   const drawQs = () => {
     $('#qs').innerHTML = qs.map(qBlock).join('') || '<p class="muted">No questions yet.</p>';
@@ -510,6 +532,7 @@ async function workbookEditor(id) {
   };
 
   view(`<p><a href="#/a/workbooks">← Workbooks</a></p>
+    ${isNew ? `<a class="importbtn" href="#/a/import"><b>Import workbook from Excel</b><span>Already built it in Mark's template? Upload it and skip the typing.</span></a>` : ''}
     <h1>${isNew ? 'New workbook' : esc(w.title)}</h1>
     ${used ? `<div class="notice">${used} learner(s) have already started or submitted this workbook. Small wording fixes are fine. For bigger changes use <b>Save as new version</b> so existing answers stay intact.</div>` : ''}
     <form id="wf" class="card">
@@ -538,6 +561,13 @@ async function workbookEditor(id) {
         Make it in Excel or Google Sheets, then File › Download › CSV. <button type="button" class="linkbtn" id="tmpl">Download a template</button></p>
         <input type="file" id="csv" accept=".csv,text/csv">
       </div>
+      ${outcomes.length ? `<h2>Learning outcomes</h2>
+      <p class="small muted">Set by the Excel import. Re-import to change them. Coverage counts what teaches and assesses each outcome.</p>
+      <div class="table-wrap"><table><thead><tr><th>Outcome</th><th>Assessed by</th><th>Reading</th><th>Knowledge</th><th>Practical</th><th></th></tr></thead><tbody>
+      ${outcomes.map((o) => { const rd = lis.filter((x) => x.kind === 'content' && x.outcome_code === o.code).length, kq = qs.filter((q) => q.outcome_code === o.code).length, pr = skills.filter((c) => c.outcome_code === o.code).length;
+        const gap = !rd || (o.assessed_by !== 'Practical' && !kq) || (o.assessed_by !== 'Knowledge' && !pr);
+        return `<tr><td><b>${esc(o.code)}</b> ${esc(o.description)}</td><td>${esc(o.assessed_by)}</td><td>${rd}</td><td>${kq}</td><td>${pr}</td><td>${gap ? '<span class="badge warn">Gap</span>' : '<span class="badge ok">Covered</span>'}</td></tr>`; }).join('')}
+      </tbody></table></div>` : ''}
       <h2>Practical skills</h2>
       <p class="small muted">The skills from this workbook that you'll check in the practical assessment, one per line. They're added automatically to the practical checklist of any package or invite that includes this workbook.</p>
       <textarea name="skills" style="min-height:8rem" placeholder="Performs hand hygiene and uses PPE correctly&#10;Positions the participant correctly&#10;…">${esc(skills.map((c) => c.description).join('\n'))}</textarea>
@@ -572,18 +602,23 @@ async function workbookEditor(id) {
   const save = async (asNew) => {
     const d = formData($('#wf'));
     qs = readQs(); lis = readLi();
-    const badLi = lis.findIndex((x) => x.kind === 'practice' && (!x.body || !x.answer || (x.qtype === 'multiple_choice' && (x.options.length < 2 || !x.options.includes(x.answer))) || (x.qtype === 'true_false' && !['True', 'False'].includes(x.answer))));
+    const badLi = lis.findIndex((x) => x.kind === 'practice' && (!x.body || !x.answer || (x.qtype === 'multiple_choice' && (x.options.length < 2 || !x.options.includes(x.answer))) || (x.qtype === 'multi_select' && (x.options.length < 2 || (parseMulti(x.answer) || []).length < 2 || !(parseMulti(x.answer) || []).every((a) => x.options.includes(a)))) || (x.qtype === 'true_false' && !['True', 'False'].includes(x.answer))));
     if (badLi >= 0) return toast(`Learning item ${badLi + 1}: practice questions need a question, options, and a correct answer that matches an option exactly`, true);
-    const bad = qs.findIndex((q) => !q.prompt || (q.qtype === 'multiple_choice' && q.options.length < 2));
-    if (bad >= 0) return toast(`Question ${bad + 1} needs text${qs[bad].qtype === 'multiple_choice' ? ' and at least 2 options' : ''}`, true);
+    const isOpt = (q) => ['multiple_choice', 'multi_select'].includes(q.qtype);
+    const bad = qs.findIndex((q) => !q.prompt || (isOpt(q) && q.options.length < 2));
+    if (bad >= 0) return toast(`Question ${bad + 1} needs text${isOpt(qs[bad]) ? ' and at least 2 options' : ''}`, true);
     const mcBad = qs.findIndex((q) => (q.qtype === 'multiple_choice' && q.correct_answer && !q.options.includes(q.correct_answer)) ||
-      (q.qtype === 'true_false' && q.correct_answer && !['True', 'False'].includes(q.correct_answer)));
+      (q.qtype === 'true_false' && q.correct_answer && !['True', 'False'].includes(q.correct_answer)) ||
+      (q.qtype === 'multi_select' && ((parseMulti(q.correct_answer) || []).length < 2 || !(parseMulti(q.correct_answer) || []).every((a) => q.options.includes(a)))));
     if (mcBad >= 0) return toast(`Question ${mcBad + 1}: correct answer must match one of the options exactly`, true);
     const rec = { title: d.title.trim(), description: d.description, version: d.version || '1.0', pass_percent: +d.pass_percent || 0, is_active: !!d.is_active };
+    if (asNew) for (const k of ['code', 'author', 'audience', 'prerequisites', 'source_documents', 'est_duration_mins', 'review_date', 'max_attempts', 'randomise', 'practical_required',
+      'practical_setting', 'practical_pass_rule', 'practical_pass_percent', 'practical_max_attempts', 'assessor_requirements', 'reasonable_adjustments', 'certificate_title', 'certificate_expiry_months']) rec[k] = w[k];
     let wid = id;
     if (isNew || asNew) {
       if (asNew) { rec.version = prompt('Version number for the new copy?', String((parseFloat(w.version) || 1) + 1)) || rec.version; }
       wid = must(await sb.from('workbooks').insert(rec).select('id').single()).id;
+      if (asNew && outcomes.length) must(await sb.from('outcomes').insert(outcomes.map((o) => ({ workbook_id: wid, position: o.position, code: o.code, description: o.description, assessed_by: o.assessed_by }))));
       if (asNew) { qs = qs.map((q) => ({ ...q, id: uuid() })); lis = lis.map((x) => ({ ...x, id: uuid() })); }
     } else {
       must(await sb.from('workbooks').update(rec).eq('id', id));
@@ -597,16 +632,29 @@ async function workbookEditor(id) {
     }
     if (lis.length) {
       must(await sb.from('learning_items').upsert(lis.map((x, i) => ({ id: x.id, workbook_id: wid, position: i + 1, kind: x.kind, title: x.title || null, body: x.body,
-        qtype: x.kind === 'practice' ? x.qtype : null, options: x.kind === 'practice' && x.qtype === 'multiple_choice' ? x.options : [],
-        answer: x.kind === 'practice' ? x.answer : null, explanation: x.kind === 'practice' ? x.explanation || null : null }))));
+        qtype: x.kind === 'practice' ? x.qtype : null,
+        options: x.kind === 'practice' && ['multiple_choice', 'multi_select'].includes(x.qtype) ? x.options : [],
+        answer: x.kind === 'practice' ? x.answer : null, explanation: x.kind === 'practice' ? x.explanation || null : null,
+        explanation_incorrect: x.kind === 'practice' ? x.explanation_incorrect || null : null, hint: x.kind === 'practice' ? x.hint || null : null,
+        block_type: x.block_type || null, section_title: x.section_title || null, section_code: x.section_code || null, outcome_code: x.outcome_code || null,
+        image_url: x.image_url || null, alt_text: x.alt_text || null, reference_source: x.reference_source || null }))));
     }
     if (qs.length) {
       must(await sb.from('questions').upsert(qs.map((q, i) => ({ id: q.id, workbook_id: wid, position: i + 1, section: q.section, prompt: q.prompt, qtype: q.qtype,
-        options: q.qtype === 'multiple_choice' ? q.options : [], marks: q.marks }))));
-      must(await sb.from('question_keys').upsert(qs.map((q) => ({ question_id: q.id, correct_answer: q.correct_answer || null, marking_guide: q.marking_guide || null }))));
+        options: ['multiple_choice', 'multi_select'].includes(q.qtype) ? q.options : [], marks: q.marks,
+        critical: !!q.critical, outcome_code: q.outcome_code || null, source_section: q.source_section || null }))));
+      must(await sb.from('question_keys').upsert(qs.map((q) => ({ question_id: q.id, correct_answer: q.correct_answer || null, marking_guide: q.marking_guide || null, feedback: q.feedback || null }))));
     }
     const skillLines = (d.skills || '').split('\n').map((x) => x.trim()).filter(Boolean);
     await saveSkills(skillLines, asNew ? [] : skills, { workbook_id: wid });
+    if (asNew && skills.length) { // carry the practical detail (criteria, critical, etc.) over to the new version
+      const fresh = must(await sb.from('competencies').select('id,description').eq('workbook_id', wid));
+      for (const f of fresh) {
+        const o = skills.find((c) => c.description === f.description); if (!o) continue;
+        const { id: _i, workbook_id: _w, package_id: _p, position: _pos, description: _d, ...detail } = o;
+        must(await sb.from('competencies').update(detail).eq('id', f.id));
+      }
+    }
     await saveOrgLinks('workbook_organisations', 'workbook_id', wid, readOrgPicker());
     if (asNew && confirm('New version saved. Archive the old version so it is no longer assigned to new learners?')) {
       must(await sb.from('workbooks').update({ is_active: false }).eq('id', id));
@@ -1044,7 +1092,10 @@ async function practical(enrId, pid) {
       <h2>Observation checklist</h2>
       <p class="small muted">Tap a result for each skill you observe. Tick "Add notes" only where you want to record something.</p>
       ${comps.length ? comps.map((c, i) => `${i === 0 || comps[i - 1].group_title !== c.group_title ? `<h3>${esc(c.group_title)}</h3>` : ''}<div class="obs">
-        <div class="obs-q">${i + 1}. ${esc(c.description)}</div>
+        <div class="obs-q">${i + 1}. ${esc(c.description)}${c.critical ? ' <span class="badge bad">Critical</span>' : ''}</div>
+        ${c.criteria ? `<div class="small muted"><b>Look for:</b> ${esc(c.criteria)}</div>` : ''}
+        ${c.assessor_prompt ? `<div class="small muted"><b>Prompt:</b> ${esc(c.assessor_prompt)}</div>` : ''}
+        ${c.method || c.conditions || c.resources || c.evidence || c.min_observations > 1 ? `<details class="small muted"><summary>Assessment detail</summary>${[['Method', c.method], ['Conditions', c.conditions], ['Resources', c.resources], ['Evidence', c.evidence], ['Observations needed', c.min_observations > 1 ? c.min_observations : '']].filter(([, v]) => v).map(([k, v]) => `<div><b>${k}:</b> ${esc(v)}</div>`).join('')}</details>` : ''}
         <div class="seg" role="radiogroup" aria-label="Result for item ${i + 1}">${R.map(([v, l, cls]) => `<label class="${cls}"><input type="radio" name="r_${c.id}" value="${v}" ${(res[c.id]?.result || 'not_assessed') === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div>
         <label class="notetoggle"><input type="checkbox" data-note="${c.id}" ${res[c.id]?.notes ? 'checked' : ''}>Add notes</label>
         <textarea name="n_${c.id}" class="obsnote" placeholder="What did you observe?" ${res[c.id]?.notes ? '' : 'hidden'}>${esc(res[c.id]?.notes)}</textarea></div>`).join('')
@@ -1062,8 +1113,19 @@ async function practical(enrId, pid) {
     // notes only count where "Add notes" is ticked
     comps.forEach((c) => { if (!$(`[data-note="${c.id}"]`).checked) d[`n_${c.id}`] = ''; });
     if (outcome === 'competent') {
-      const notOk = comps.filter((c) => !['competent', 'not_applicable'].includes(d[`r_${c.id}`]));
-      if (notOk.length && !confirm(`${notOk.length} item(s) aren't marked competent. Sign off as competent anyway?`)) return;
+      // pass rules are enforced per workbook: critical items must be Competent, then the workbook's pass rule applies
+      const fails = [];
+      const groups = {}; comps.forEach((c) => (groups[c.group_title] ||= []).push(c));
+      for (const [gname, items] of Object.entries(groups)) {
+        const counted = items.filter((c) => d[`r_${c.id}`] !== 'not_applicable');
+        const ok = counted.filter((c) => d[`r_${c.id}`] === 'competent');
+        const crit = counted.filter((c) => c.critical && d[`r_${c.id}`] !== 'competent');
+        if (crit.length) fails.push(`${gname}: ${crit.length} critical item(s) not Competent (${crit.map((c) => c.description).join('; ')})`);
+        const rule = items[0].pass_rule, pct = items[0].pass_percent;
+        if (rule === 'All critical items plus pass %') { const got = counted.length ? Math.round(100 * ok.length / counted.length) : 100; if (got < (pct || 100)) fails.push(`${gname}: ${got}% competent, pass mark is ${pct}%`); }
+        else if (counted.length - ok.length > crit.length) fails.push(`${gname}: ${counted.length - ok.length} item(s) not marked Competent (rule: all items competent)`);
+      }
+      if (fails.length) return toast(`Can't sign off as Competent. ${fails.join(' · ')}. Mark them Competent, or sign off as Not yet competent.`, true);
     }
     const rec = { enrollment_id: enrId, assessed_on: d.assessed_on, location: d.location, assessor_name: d.assessor_name, notes: d.notes, outcome,
       signed_off_at: outcome === 'draft' ? null : (p.signed_off_at || new Date().toISOString()) };
