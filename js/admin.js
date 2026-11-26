@@ -377,8 +377,7 @@ async function workbooks() {
   ]);
   const list = rows.filter((w) => availableTo(w.workbook_organisations));
   const n = (x) => x?.[0]?.count ?? 0;
-  view(`<div class="row between"><h1>Workbook library <span class="muted small">· ${esc(await orgName())}</span></h1><span class="row"><a class="btn secondary" href="#/a/prices">Price list</a><a class="btn secondary" href="#/a/workbook/new">New blank workbook</a></span></div>
-    <a class="importbtn" href="#/a/import"><b>Import workbook from Excel</b><span>Upload a completed copy of Mark's template. You'll see a preview before anything is saved.</span></a>
+  view(`<div class="row between"><h1>Workbook library <span class="muted small">· ${esc(await orgName())}</span></h1><span class="row"><a class="btn secondary" href="#/a/prices">Price list</a><a class="btn secondary" href="#/a/workbook/new">New blank workbook</a><a class="btn" href="#/a/import">Import from Excel</a></span></div>
     <p class="small muted">Each workbook has Part 1 learning material, Part 2 knowledge questions and the practical skills it covers. ${state.org ? 'Showing workbooks available to this organisation.' : ''}</p>
     <div class="card table-wrap"><table><thead><tr><th>Workbook</th><th>Learning</th><th>Questions</th><th>Practical skills</th><th>In packages</th><th>Assigned</th><th></th></tr></thead><tbody>
     ${list.map((w) => `<tr class="click" data-id="${w.id}">
@@ -532,7 +531,7 @@ async function workbookEditor(id) {
   };
 
   view(`<p><a href="#/a/workbooks">← Workbooks</a></p>
-    ${isNew ? `<a class="importbtn" href="#/a/import"><b>Import workbook from Excel</b><span>Already built it in Mark's template? Upload it and skip the typing.</span></a>` : ''}
+    ${isNew ? `<p><a class="btn" href="#/a/import">Import from Excel</a> <span class="small muted">Already built it in Mark's template? Upload it and skip the typing.</span></p>` : ''}
     <h1>${isNew ? 'New workbook' : esc(w.title)}</h1>
     ${used ? `<div class="notice">${used} learner(s) have already started or submitted this workbook. Small wording fixes are fine. For bigger changes use <b>Save as new version</b> so existing answers stay intact.</div>` : ''}
     <form id="wf" class="card">
