@@ -71,7 +71,11 @@ export function ratingInput(name, label) {
 // ---------------- top bar ----------------
 async function renderTopbar() {
   const bar = $('#topbar');
-  if (!state.profile) { bar.innerHTML = `<div class="inner"><span class="title">${esc(BRAND.name)}</span></div>`; return; }
+  if (!state.profile) {
+    const loggedOut = !state.user;
+    bar.innerHTML = `<div class="inner"><a class="title" href="#/">${esc(BRAND.name)}</a>${loggedOut ? `<nav class="pubnav"><a href="#/">Home</a><a href="#/login">Sign in</a><a href="#/activate">Begin learning</a><a href="#/org-signup">Organisations</a></nav>` : ''}</div>`;
+    return;
+  }
   const h = location.hash || '#/';
   if (state.profile.role === 'admin') {
     const orgs = must(await sb.from('organisations').select('id,name').order('name'));
@@ -123,6 +127,7 @@ function loginView() {
     <hr style="border:0;border-top:1px solid var(--line)">
     <a class="btn secondary block center" href="#/activate">First time? Activate with a class code</a>
     <p class="center small" style="margin-top:1rem"><a href="#/org-signup">Organisation? Request an account</a></p>
+    <p class="center small"><a href="#/">&larr; Back to home</a></p>
   </div>`);
   $('#f').onsubmit = async (e) => {
     e.preventDefault(); const d = formData(e.target); const who = d.who.trim();
@@ -151,7 +156,7 @@ function activateView() {
       <button class="btn block">Check</button>
     </form>
     <div id="step2"></div>
-    <p class="center small"><a href="#/login">Already activated? Sign in</a></p>
+    <p class="center small"><a href="#/login">Already activated? Sign in</a> &middot; <a href="#/">Home</a></p>
   </div>`);
   $('#f1').onsubmit = async (e) => {
     e.preventDefault(); const d = formData(e.target);
@@ -194,7 +199,7 @@ function orgSignupView() {
       <label for="pw">Password (at least 8 characters)</label><input id="pw" name="password" type="password" minlength="8" autocomplete="new-password" required>
       <button class="btn block">Request account</button>
     </form>
-    <p class="center small"><a href="#/login">Back to sign in</a></p>
+    <p class="center small"><a href="#/login">Back to sign in</a> &middot; <a href="#/">Home</a></p>
   </div>`);
   $('#f').onsubmit = async (e) => {
     e.preventDefault(); const d = formData(e.target);
@@ -219,7 +224,7 @@ function joinView() {
       <button class="btn block">Check code</button>
     </form>
     <div id="step2"></div>
-    <p class="center small"><a href="#/login">Already have an account? Sign in</a></p>
+    <p class="center small"><a href="#/login">Already have an account? Sign in</a> &middot; <a href="#/">Home</a></p>
   </div>`);
   $('#f1').onsubmit = async (e) => {
     e.preventDefault(); const d = formData(e.target);
@@ -269,10 +274,12 @@ function newPasswordView() {
 let learner, admin, orgMod, docs;
 export async function render() {
   const h = location.hash || '#/';
+  $('#app').classList.remove('landing');
   if (h === '#/newpass') return newPasswordView();
   if (h === '#/try') return tryDemo();
   if (!state.user) {
     await renderTopbar();
+    if (h === '#/' || h === '') { const m = await import('./landing.js'); return m.landingView(); }
     return h === '#/join' ? joinView() : h === '#/activate' ? activateView() : h === '#/org-signup' ? orgSignupView() : loginView();
   }
   await renderTopbar();

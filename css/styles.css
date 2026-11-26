@@ -1,6 +1,6 @@
 :root {
   --ink: #1b2a33; --muted: #5d6b74; --line: #d9e1e6; --bg: #f4f7f8; --card: #fff;
-  --brand: #0f6b74; --brand-ink: #fff; --brand-soft: #e3f1f2;
+  --brand: #0b3552; --accent: #0f8a94; --brand-ink: #fff; --brand-soft: #e4edf3;
   --ok: #1f7a3d; --ok-soft: #e4f4e9; --warn: #9a5b00; --warn-soft: #fdf1dc;
   --bad: #b3261e; --bad-soft: #fbe7e6; --radius: 10px;
 }
@@ -186,3 +186,42 @@ html, body { overflow-x: hidden; }
 @media (max-width: 360px) { .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .trainerdemo { margin-top: 1rem; border: 2px dashed var(--brand); border-radius: var(--radius); padding: .6rem .9rem; background: #fbfdfd; }
 .trainerdemo summary { font-weight: 700; color: var(--brand); cursor: pointer; padding: .2rem 0; }
+
+/* ---- public landing page ---- */
+#topbar .pubnav { width: auto; order: 0; margin-left: auto; }
+#topbar .pubnav a { font-weight: 600; }
+main.landing { max-width: none; padding: 0; }
+.landing .wrap { max-width: 1100px; margin: 0 auto; padding: 0 1rem; }
+.landing .ico { width: 1.9rem; height: 1.9rem; color: var(--accent); flex: none; }
+.landing h1 { font-size: clamp(1.8rem, 4.5vw, 2.7rem); line-height: 1.15; margin: 0 0 1rem; letter-spacing: -.01em; }
+.hero { background: linear-gradient(135deg, #0b3552 0%, #0e4a68 60%, #0f6b7c 100%); color: #fff; padding: 3.5rem 0 3.5rem; }
+.hero-grid { display: grid; gap: 2.5rem; grid-template-columns: 1.3fr 1fr; align-items: center; }
+.eyebrow { text-transform: uppercase; letter-spacing: .08em; font-size: .78rem; font-weight: 700; color: #9fd8de; margin: 0 0 .75rem; }
+.lead { font-size: 1.1rem; color: #dbe9f0; max-width: 34rem; margin: 0 0 1.5rem; }
+.cta-row { display: flex; flex-wrap: wrap; gap: .75rem; }
+.btn.lg { padding: .8rem 1.5rem; font-size: 1.02rem; }
+.btn.light { background: #fff; color: var(--brand); border-color: #fff; }
+.btn.ghost { background: transparent; color: #fff; border-color: rgba(255,255,255,.65); }
+.btn.light:hover, .btn.ghost:hover { filter: brightness(.95); }
+.hero-note { font-size: .88rem; color: #b9d3df; margin: 1rem 0 0; }
+.hero-panel { background: #fff; color: var(--ink); border-radius: 14px; padding: 1.25rem; box-shadow: 0 12px 32px rgba(0,0,0,.25); }
+.hero-panel h2 { margin: 0 0 .75rem; font-size: 1.05rem; }
+.portal { display: flex; align-items: center; gap: .9rem; padding: .8rem .9rem; border: 1px solid var(--line); border-radius: 10px; margin-top: .6rem; text-decoration: none; color: var(--ink); }
+.portal:hover { border-color: var(--accent); background: var(--brand-soft); }
+.portal b small { display: block; font-weight: 400; color: var(--muted); font-size: .85rem; }
+.band { padding: 3.25rem 0; background: #fff; } .band.alt { background: var(--bg); }
+.sec { font-size: 1.6rem; margin: 0 0 .4rem; text-align: center; } .sec-sub { text-align: center; color: var(--muted); margin: 0 0 2rem; }
+.steps4 { list-style: none; margin: 0; padding: 0; display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+.steps4 li { border: 1px solid var(--line); border-top: 3px solid var(--accent); border-radius: 10px; padding: 1.1rem; background: #fff; }
+.steps4 .num { display: block; font-size: .75rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin-top: .5rem; }
+.landing h3 { margin: .35rem 0 .3rem; } .landing p { margin: 0; }
+.steps4 p, .feat-item p, .trust p { color: var(--muted); font-size: .95rem; }
+.feat { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+.feat-item { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 1.1rem; }
+.trust { display: grid; gap: 1.5rem; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.cta-band { background: var(--brand); color: #fff; padding: 3rem 0; }
+.cta-band h2 { margin: 0 0 .4rem; } .cta-band p { color: #cfdfe8; margin: 0 0 1.25rem; }
+.foot { background: #082739; color: #b9cbd6; font-size: .85rem; padding: 1.1rem 0; }
+.foot .wrap { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; justify-content: space-between; }
+.foot a { color: #fff; }
+@media (max-width: 800px) { .hero-grid { grid-template-columns: 1fr; } .hero { padding: 2.25rem 0; } #topbar .pubnav { width: 100%; margin-left: 0; order: 3; } }
