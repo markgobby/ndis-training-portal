@@ -345,3 +345,15 @@ tr.grp td { background: var(--brand-soft); font-size: .85rem; }
 .cta-band { background: var(--brand); } .foot { background: #072437; }
 .pwtoggle { border-radius: 4px; }
 @media print { #sidebar { display: none !important; } body.has-side #shell { display: block; } }
+
+/* keep top bar and sidebar pinned while the page scrolls */
+html, body { overflow-x: clip; }
+body { padding-top: 52px; }
+#topbar { position: fixed; top: 0; left: 0; right: 0; z-index: 30; }
+body.has-side #shell { display: block; padding-left: 236px; min-height: calc(100vh - 52px); }
+body.has-side #sidebar { position: fixed; top: 52px; left: 0; bottom: 0; width: 236px; height: auto; z-index: 20; overflow-y: auto; }
+@media (max-width: 860px) {
+  body.has-side #shell { padding-left: 0; }
+  body.has-side #sidebar { z-index: 25; }
+}
+@media print { body { padding-top: 0; } body.has-side #shell { padding-left: 0; } }
