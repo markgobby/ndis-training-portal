@@ -33,12 +33,12 @@ function rowsOf(X, wb, name, errors, required) {
   });
 }
 
-export async function parseWorkbook(file) {
+export async function parseWorkbook(file, opts = {}) {
   const X = await loadXlsx();
-  return parseBook(X, X.read(await file.arrayBuffer(), { type: 'array', cellDates: true }));
+  return parseBook(X, X.read(await file.arrayBuffer(), { type: 'array', cellDates: true }), opts);
 }
 
-export async function parseBook(X, wb) {
+export async function parseBook(X, wb, opts = {}) {
   const errors = [], warnings = [];
   const err = (tab, row, msg) => errors.push(`${tab}${row ? ` row ${row}` : ''}: ${msg}`);
   const warn = (tab, row, msg) => warnings.push(`${tab}${row ? ` row ${row}` : ''}: ${msg}`);
@@ -183,14 +183,29 @@ export async function parseBook(X, wb) {
     if (o.assessed_by !== 'Knowledge' && !o.practical) warn('Outcomes', 0, `${o.code} is marked ${o.assessed_by} but has no practical item.`);
   });
   if (title) {
-    const dup = must(await sb.from('workbooks').select('id,title,code'));
-    const t = dup.find((w) => w.title.toLowerCase() === title.toLowerCase() || (wbRow.code && w.code && w.code.toLowerCase() === wbRow.code.toLowerCase()));
-    if (t) errors.push(`A workbook called "${t.title}" already exists. Change the Title (and Workbook_ID) on the Cover tab so this does not duplicate it.`);
+    const all = must(await sb.from('workbooks').select('id,title,code'));
+    const same = (w) => w.title.toLowerCase() === title.toLowerCase() || (wbRow.code && w.code && w.code.toLowerCase() === wbRow.code.toLowerCase());
+    if (opts.replaceId) {
+      const me = all.find((w) => w.id === opts.replaceId);
+      if (!wbRow.code) errors.push('Cover: Workbook_ID is empty. It is needed to confirm this file belongs to this workbook.');
+      else if (me?.code && me.code.toLowerCase() !== wbRow.code.toLowerCase()) errors.push(`Cover: this file is ${wbRow.code}, but the workbook you are replacing is ${me.code}. Open the right workbook, or fix the Workbook_ID.`);
+      else if (me && !me.code) warnings.push(`This workbook has no Workbook_ID yet, so it will take ${wbRow.code} from the file.`);
+      const t = all.find((w) => w.id !== opts.replaceId && same(w));
+      if (t) errors.push(`Another workbook ("${t.title}") already uses that Title or Workbook_ID. Two workbooks can't share them.`);
+    } else {
+      const t = all.find(same);
+      if (t) errors.push(`A workbook called "${t.title}"${t.code ? ` (${t.code})` : ''} already exists. To update it, open that workbook and use "Replace with updated template". For a different workbook, change the Title and Workbook_ID on the Cover tab.`);
+    }
   }
   return { wb: wbRow, outcomes, items, questions, skills, coverage, errors, warnings, trialN };
 }
 
 const chunk = (a, n = 200) => Array.from({ length: Math.ceil(a.length / n) }, (_, i) => a.slice(i * n, i * n + n));
+
+const itemRowOf = (it) => ({ kind: it.kind, block_type: it.block_type ?? null, section_code: it.section_code ?? null, section_title: it.section_title ?? null,
+  outcome_code: it.outcome_code ?? null, title: it.title ?? null, body: it.body ?? '', image_url: it.image_url ?? null, alt_text: it.alt_text ?? null, reference_source: it.reference_source ?? null,
+  qtype: it.qtype ?? null, options: it.options ?? [], answer: it.answer ?? null, hint: it.hint ?? null, explanation: it.explanation ?? null, explanation_incorrect: it.explanation_incorrect ?? null });
+export const payloadOf = (p) => ({ wb: p.wb, outcomes: p.outcomes, items: p.items.map(itemRowOf), questions: p.questions, skills: p.skills });
 
 export async function createFromParsed(p) {
   const w = must(await sb.from('workbooks').insert({ ...p.wb, is_active: true }).select('id').single());
@@ -247,6 +262,72 @@ export async function importView() {
       ev.target.disabled = true; ev.target.textContent = 'Creating…';
       try { const id = await createFromParsed(p); toast('Workbook imported'); go(`#/a/workbook/${id}`); }
       catch (x) { toast(x.message || 'Import failed. Nothing was saved.', true); ev.target.disabled = false; ev.target.textContent = 'Create workbook'; }
+    };
+  };
+}
+
+// ---------- replace an existing workbook with an updated template ----------
+const download = (name, obj) => {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' }));
+  a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+};
+
+export async function replaceView(id) {
+  const [w, nItems, nQs, skills, asg] = await Promise.all([
+    sb.from('workbooks').select('*').eq('id', id).single().then((r) => must(r)),
+    sb.from('learning_items').select('id', { count: 'exact', head: true }).eq('workbook_id', id).then((r) => r.count || 0),
+    sb.from('questions').select('id', { count: 'exact', head: true }).eq('workbook_id', id).then((r) => r.count || 0),
+    sb.from('competencies').select('id,description').eq('workbook_id', id).then((r) => must(r)),
+    sb.from('assignments').select('status').eq('workbook_id', id).then((r) => must(r)),
+  ]);
+  const by = {}; asg.forEach((a) => (by[a.status] = (by[a.status] || 0) + 1));
+  const locked = (by.submitted || 0) + (by.resubmit || 0) + (by.competent || 0), started = by.in_progress || 0;
+  view(`<div class="row"><a href="#/a/workbook/${id}">← ${esc(w.title)}</a></div>
+    <div class="card"><h1>Replace with updated template</h1>
+    <p>This swaps the content of <b>${esc(w.title)}</b> for the new file. The workbook itself stays, so its packages, price, availability and learner assignments are untouched, and a duplicate can't be created.</p>
+    <div class="table-wrap"><table><tbody>
+      <tr><td>Current</td><td>${esc(w.title)} · v${esc(w.version)}${w.code ? ` · ${esc(w.code)}` : ' · no Workbook_ID yet'}</td></tr>
+      <tr><td>Content now</td><td>${nItems} reading/practice items · ${nQs} questions · ${skills.length} practical skills</td></tr>
+      <tr><td>Learners</td><td>${asg.length ? `${asg.length} assigned (${Object.entries(by).map(([k, v]) => `${v} ${k.replace('_', ' ')}`).join(', ')})` : 'none assigned'}</td></tr>
+    </tbody></table></div>
+    ${locked ? `<div class="notice bad"><b>Replace is blocked.</b> ${locked} learner(s) have submitted, been returned or completed this workbook, and replacing would delete their answers. Use <a href="#/a/workbook/${id}">Save as new version</a> from the workbook page instead.</div>` : `
+    <p class="small muted">The new file's Workbook_ID must match${w.code ? ` <b>${esc(w.code)}</b>` : ''}. A backup of the current content downloads to your computer before anything changes.</p>
+    <label class="btn" style="display:inline-block;cursor:pointer">Choose updated Excel file<input type="file" id="f" accept=".xlsx,.xlsm" hidden></label>`}
+    <div id="out" style="margin-top:1rem"></div></div>`);
+  if (locked) return;
+  $('#f').onchange = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const out = $('#out'); out.innerHTML = '<p class="muted">Reading file…</p>';
+    let p;
+    try { p = await parseWorkbook(file, { replaceId: id }); } catch (x) { out.innerHTML = `<div class="notice bad">${esc(x.message || 'Could not read that file.')}</div>`; return; }
+    const li = (a) => a.map((m) => `<li>${esc(m)}</li>`).join('');
+    const nContent = p.items.filter((i) => i.kind === 'content').length;
+    const oldSk = new Set(skills.map((s) => s.description)), newSk = new Set(p.skills.map((s) => s.description));
+    const keep = [...newSk].filter((d) => oldSk.has(d)).length;
+    out.innerHTML = `<h2>Old → new</h2><div class="table-wrap"><table><thead><tr><th></th><th>Now</th><th>New file</th></tr></thead><tbody>
+        <tr><td>Title</td><td>${esc(w.title)}</td><td>${esc(p.wb.title)}</td></tr>
+        <tr><td>Version</td><td>${esc(w.version)}</td><td>${esc(p.wb.version)}</td></tr>
+        <tr><td>Reading + practice items</td><td>${nItems}</td><td>${p.items.length} (${nContent} reading, ${p.trialN} practice)</td></tr>
+        <tr><td>Knowledge questions</td><td>${nQs}</td><td>${p.questions.length} (${p.questions.filter((q) => q.critical).length} critical, pass mark ${p.wb.pass_percent}%)</td></tr>
+        <tr><td>Practical skills</td><td>${skills.length}</td><td>${p.skills.length} (${keep} unchanged keep their results, ${newSk.size - keep} new, ${oldSk.size - keep} removed)</td></tr>
+        <tr><td>Outcomes</td><td>—</td><td>${p.outcomes.length}</td></tr>
+      </tbody></table></div>
+      ${started ? `<div class="notice bad">${started} learner(s) have started this workbook. Their in-progress answers will be cleared. Anything they read or confirmed in Part 1 stays.</div>` : ''}
+      ${p.errors.length ? `<div class="notice bad"><b>Fix these in the file, then choose it again (${p.errors.length}):</b><ul>${li(p.errors)}</ul></div>` : '<div class="notice info">No errors found.</div>'}
+      ${p.warnings.length ? `<div class="notice info"><b>Worth a look (${p.warnings.length}):</b><ul>${li(p.warnings)}</ul></div>` : ''}
+      <label class="choice"><input type="checkbox" id="ok" ${p.errors.length ? 'disabled' : ''}>I understand this replaces the current content of this workbook.</label>
+      <div class="row" style="margin-top:1rem"><button class="btn danger" id="go" disabled>Replace workbook</button><a class="btn secondary" href="#/a/workbook/${id}">Cancel</a></div>`;
+    $('#ok').onchange = () => ($('#go').disabled = !$('#ok').checked || !!p.errors.length);
+    $('#go').onclick = async (ev) => {
+      ev.target.disabled = true; ev.target.textContent = 'Backing up…';
+      try {
+        const [outc, items, qs, comps] = await Promise.all(['outcomes', 'learning_items', 'questions', 'competencies'].map((t) => sb.from(t).select('*').eq('workbook_id', id).then((r) => must(r))));
+        const keys = qs.length ? must(await sb.from('question_keys').select('*').in('question_id', qs.map((q) => q.id))) : [];
+        download(`backup-${(w.code || w.title).replace(/[^\w-]+/g, '_')}-v${w.version}-${new Date().toISOString().slice(0, 10)}.json`, { workbook: w, outcomes: outc, learning_items: items, questions: qs, question_keys: keys, competencies: comps });
+        ev.target.textContent = 'Replacing…';
+        must(await sb.rpc('admin_replace_workbook', { p_workbook: id, p_payload: payloadOf(p) }), 'Replace failed. Nothing was changed.');
+        toast('Workbook replaced'); go(`#/a/workbook/${id}`);
+      } catch (x) { toast(x.message || 'Replace failed. Nothing was changed.', true); ev.target.disabled = false; ev.target.textContent = 'Replace workbook'; }
     };
   };
 }

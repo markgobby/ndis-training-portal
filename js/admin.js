@@ -1,6 +1,6 @@
 import { sb, state, BRAND, $, $$, esc, fmtDate, view, go, toast, must, formData, badge, stageSteps, formatText, money, blockHtml, parseMulti, ansText } from './app.js';
 import { QUOTE_DEFAULTS } from './config.js';
-import { importView, TEMPLATE_URL } from './import.js';
+import { importView, replaceView, TEMPLATE_URL } from './import.js';
 
 const orgF = (q, col) => (state.org ? q.eq(col, state.org) : q);
 const orgName = async () => state.org ? must(await sb.from('organisations').select('name').eq('id', state.org).single()).name : 'All organisations';
@@ -48,6 +48,7 @@ export async function route(h) {
   if (h === '#/a/requests') return requestsList();
   if (h === '#/a/prices') return priceList();
   if (h === '#/a/import') return importView();
+  if ((m = h.match(/^#\/a\/replace\/([\w-]+)$/))) return replaceView(m[1]);
   if ((m = h.match(/^#\/a\/request\/([\w-]+)$/))) return requestDetail(m[1]);
   if (h === '#/a/accounts') return accounts();
   if (h === '#/a/orgs') return orgs();
@@ -543,7 +544,7 @@ async function workbookEditor(id) {
       <label>Description / instructions for learners</label><textarea name="description">${esc(w.description)}</textarea>
       <label class="choice" style="max-width:260px"><input type="checkbox" name="is_active" ${w.is_active ? 'checked' : ''}>Active (can be assigned)</label>
       ${orgPicker(orgsL, wOrgs)}
-      ${!isNew ? `<p><a class="btn small secondary" href="#/a/preview/${id}">Preview as learner</a></p>` : ''}
+      ${!isNew ? `<p class="row"><a class="btn small secondary" href="#/a/preview/${id}">Preview as learner</a><a class="btn small" href="#/a/replace/${id}">Replace with updated template</a></p>` : ''}
       <h2>Part 1 · Learning material</h2>
       <p class="small muted">What the learner needs to know, with optional practice questions. Practice answers are never recorded.</p>
       <div id="lis"></div>
