@@ -12,6 +12,16 @@ export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 export const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 export const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' }) : '—');
 export const view = (html) => { $('#app').innerHTML = html; window.scrollTo(0, 0); };
+function addPasswordToggles() {
+  $$('#app input[type=password]').forEach((inp) => {
+    if (inp.parentNode.classList.contains('pwwrap')) return;
+    const wrap = document.createElement('div'); wrap.className = 'pwwrap';
+    inp.parentNode.insertBefore(wrap, inp); wrap.appendChild(inp);
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'pwtoggle'; b.textContent = 'Show'; b.setAttribute('aria-label', 'Show password');
+    b.onclick = () => { const show = inp.type === 'password'; inp.type = show ? 'text' : 'password'; b.textContent = show ? 'Hide' : 'Show'; b.setAttribute('aria-label', show ? 'Hide password' : 'Show password'); };
+    wrap.appendChild(b);
+  });
+}
 export const go = (hash) => { if (location.hash === hash) render(); else location.hash = hash; };
 
 let toastTimer;
@@ -197,12 +207,14 @@ function orgSignupView() {
       <label for="ph">Phone (optional)</label><input id="ph" name="phone" type="tel" autocomplete="tel">
       <label for="em">Email</label><input id="em" name="email" type="email" autocomplete="email" required>
       <label for="pw">Password (at least 8 characters)</label><input id="pw" name="password" type="password" minlength="8" autocomplete="new-password" required>
+      <label for="pw2">Confirm password</label><input id="pw2" name="password2" type="password" minlength="8" autocomplete="new-password" required>
       <button class="btn block">Request account</button>
     </form>
     <p class="center small"><a href="#/login">Back to sign in</a> &middot; <a href="#/">Home</a></p>
   </div>`);
   $('#f').onsubmit = async (e) => {
     e.preventDefault(); const d = formData(e.target);
+    if (d.password !== d.password2) return toast('Passwords do not match', true);
     const btn = e.target.querySelector('button'); btn.disabled = true;
     const { data, error } = await sb.auth.signUp({ email: d.email.trim(), password: d.password,
       options: { emailRedirectTo: location.origin + location.pathname, data: { full_name: d.full_name.trim(), phone: d.phone.trim(), org_name: d.org_name.trim() } } });
@@ -237,10 +249,12 @@ function joinView() {
         <label for="ph">Mobile (optional)</label><input id="ph" name="phone" type="tel" autocomplete="tel">
         <label for="em">Email</label><input id="em" name="email" type="email" autocomplete="email" required>
         <label for="pw">Create a password (at least 8 characters)</label><input id="pw" name="password" type="password" minlength="8" autocomplete="new-password" required>
+        <label for="pw2">Confirm password</label><input id="pw2" name="password2" type="password" minlength="8" autocomplete="new-password" required>
         <button class="btn block">Create account</button>
       </form>`;
     $('#f2').onsubmit = async (ev) => {
       ev.preventDefault(); const p = formData(ev.target);
+      if (p.password !== p.password2) return toast('Passwords do not match', true);
       const btn = ev.target.querySelector('button'); btn.disabled = true;
       const { data, error } = await sb.auth.signUp({
         email: p.email.trim(), password: p.password,
@@ -261,10 +275,13 @@ function joinView() {
 function newPasswordView() {
   view(`<div class="card narrow"><h1>Set a new password</h1><form id="f">
     <label for="pw">New password</label><input id="pw" name="password" type="password" minlength="8" required autocomplete="new-password">
+    <label for="pw2">Confirm new password</label><input id="pw2" name="password2" type="password" minlength="8" required autocomplete="new-password">
     <button class="btn block">Save password</button></form></div>`);
   $('#f').onsubmit = async (e) => {
     e.preventDefault();
-    const { error } = await sb.auth.updateUser({ password: formData(e.target).password });
+    const np = formData(e.target);
+    if (np.password !== np.password2) return toast('Passwords do not match', true);
+    const { error } = await sb.auth.updateUser({ password: np.password });
     if (error) return toast(error.message, true);
     toast('Password updated'); go('#/');
   };
@@ -325,6 +342,7 @@ async function boot() {
 sb.auth.onAuthStateChange((event) => {
   if (event === 'PASSWORD_RECOVERY') location.hash = '#/newpass';
 });
+new MutationObserver(addPasswordToggles).observe($('#app'), { childList: true, subtree: true });
 window.addEventListener('hashchange', () => render().catch(console.error));
 
 if (SUPABASE_URL.includes('YOUR-PROJECT')) {

@@ -226,3 +226,7 @@ main.landing { max-width: none; padding: 0; }
 .foot .wrap { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; justify-content: space-between; }
 .foot a { color: #fff; }
 @media (max-width: 800px) { .hero-grid { grid-template-columns: 1fr; } .hero { padding: 2.25rem 0; } #topbar .pubnav { width: 100%; margin-left: 0; order: 3; } }
+
+.pwwrap { position: relative; } .pwwrap input { padding-right: 4.2rem; }
+.pwtoggle { position: absolute; right: .35rem; top: 50%; transform: translateY(-50%); background: none; border: 0; color: var(--brand); font: inherit; font-size: .85rem; font-weight: 600; cursor: pointer; padding: .3rem .5rem; border-radius: 6px; }
+.pwtoggle:hover { background: var(--brand-soft); }
