@@ -183,7 +183,7 @@ export async function parseBook(X, wb, opts = {}) {
     if (o.assessed_by !== 'Knowledge' && !o.practical) warn('Outcomes', 0, `${o.code} is marked ${o.assessed_by} but has no practical item.`);
   });
   if (title) {
-    const all = must(await sb.from('workbooks').select('id,title,code'));
+    const all = must(await sb.from('workbooks').select('id,title,code').eq('is_active', true)); // archived versions don't count as duplicates
     const same = (w) => w.title.toLowerCase() === title.toLowerCase() || (wbRow.code && w.code && w.code.toLowerCase() === wbRow.code.toLowerCase());
     if (opts.replaceId) {
       const me = all.find((w) => w.id === opts.replaceId);
