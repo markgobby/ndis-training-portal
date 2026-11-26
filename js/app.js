@@ -110,7 +110,7 @@ async function renderTopbar() {
       <button class="btn small" id="logout">${guest ? 'End demo' : 'Sign out'}</button></div>
       ${guest ? '<div class="guestbar">Demo mode: explore freely. Nothing you do here is real or kept.</div>' : ''}`;
   }
-  $('#logout').onclick = async () => { await sb.auth.signOut(); state.profile = null; go('#/login'); };
+  $('#logout').onclick = async () => { const wasGuest = state.user?.is_anonymous; await sb.auth.signOut(); state.user = null; state.profile = null; go(wasGuest ? '#/' : '#/login'); };
 }
 
 // ---------------- auth screens ----------------
