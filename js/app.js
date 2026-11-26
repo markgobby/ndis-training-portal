@@ -78,46 +78,53 @@ export function ratingInput(name, label) {
     <div class="small muted">1 = poor, 5 = excellent</div></fieldset>`;
 }
 
-// ---------------- top bar ----------------
+// ---------------- top bar + sidebar ----------------
+const NAV_ADMIN = [
+  ['', [['#/', 'Dashboard']]],
+  ['Training', [['#/a/review', 'Review'], ['#/a/requests', 'Pack requests'], ['#/a/workbooks', 'Workbooks'], ['#/a/packages', 'Packages'], ['#/a/invites', 'Invite codes']]],
+  ['People', [['#/a/learners', 'Learners'], ['#/a/orgs', 'Organisations'], ['#/a/accounts', 'Accounts']]],
+  ['', [['#/a/feedback', 'Feedback']]],
+];
+const NAV_ORG = [['', [['#/', 'Dashboard'], ['#/o/learners', 'Learners'], ['#/o/requests', 'Pack requests']]]];
+const navHtml = (groups, h) => groups.map(([g, ls]) => `${g ? `<div class="navgroup">${g}</div>` : ''}${ls.map(([href, l]) =>
+  `<a href="${href}" class="${(href === '#/' ? h === '#/' : h.startsWith(href)) ? 'active' : ''}">${l}</a>`).join('')}`).join('');
+
 async function renderTopbar() {
-  const bar = $('#topbar');
+  const bar = $('#topbar'), side = $('#sidebar');
+  const role = state.profile?.role;
+  document.body.className = role ? `role-${role}` : 'public';
+  side.innerHTML = '';
   if (!state.profile) {
     const loggedOut = !state.user;
     bar.innerHTML = `<div class="inner"><a class="title" href="#/">${esc(BRAND.name)}</a>${loggedOut ? `<nav class="pubnav"><a href="#/">Home</a><a href="#/login">Sign in</a><a href="#/activate">Begin learning</a><a href="#/org-signup">Organisations</a></nav>` : ''}</div>`;
     return;
   }
   const h = location.hash || '#/';
-  if (state.profile.role === 'admin') {
-    const orgs = must(await sb.from('organisations').select('id,name').order('name'));
-    if (state.org && !orgs.some((o) => o.id === state.org)) state.org = '';
-    const links = [['#/', 'Dashboard'], ['#/a/learners', 'Learners'], ['#/a/review', 'Review'], ['#/a/workbooks', 'Workbooks'],
-      ['#/a/packages', 'Packages'], ['#/a/requests', 'Pack requests'], ['#/a/accounts', 'Accounts'], ['#/a/orgs', 'Organisations'], ['#/a/invites', 'Invite codes'], ['#/a/feedback', 'Feedback']];
-    bar.innerHTML = `<div class="inner">
-      <a class="title" href="#/">${esc(BRAND.name)} · Admin</a>
-      <label class="small" style="margin:0;color:#fff" for="orgSwitch">Viewing</label>
-      <select id="orgSwitch" aria-label="Organisation filter">
-        <option value="">All organisations</option>
-        ${orgs.map((o) => `<option value="${o.id}" ${o.id === state.org ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}
-      </select>
-      <button class="btn small" id="logout">Sign out</button>
-      <nav>${links.map(([href, l]) => `<a href="${href}" class="${(href === '#/' ? h === '#/' : h.startsWith(href)) ? 'active' : ''}">${l}</a>`).join('')}</nav>
-    </div>`;
-    $('#orgSwitch').onchange = (e) => {
+  const who = esc(state.profile.full_name || '');
+  if (role === 'admin' || role === 'organisation') {
+    document.body.classList.add('has-side');
+    let orgBlock = '';
+    if (role === 'admin') {
+      const orgs = must(await sb.from('organisations').select('id,name').order('name'));
+      if (state.org && !orgs.some((o) => o.id === state.org)) state.org = '';
+      orgBlock = `<div class="orgswitch"><label for="orgSwitch">Viewing</label><select id="orgSwitch" aria-label="Organisation filter"><option value="">All organisations</option>
+        ${orgs.map((o) => `<option value="${o.id}" ${o.id === state.org ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select></div>`;
+    }
+    bar.innerHTML = `<div class="inner"><button class="menubtn" id="menubtn" aria-label="Menu" aria-expanded="false">&#9776;</button>
+      <a class="title" href="#/">${esc(BRAND.name)}</a><span class="who">${who}${role === 'admin' ? ' · Administrator' : ' · Organisation'}</span><button class="btn small ghost" id="logout">Sign out</button></div>`;
+    side.innerHTML = `${orgBlock}<nav>${navHtml(role === 'admin' ? NAV_ADMIN : NAV_ORG, h)}</nav>`;
+    $('#menubtn').onclick = () => { const o = document.body.classList.toggle('nav-open'); $('#menubtn').setAttribute('aria-expanded', o); };
+    side.onclick = (e) => { if (e.target.closest('a')) document.body.classList.remove('nav-open'); };
+    if (role === 'admin') $('#orgSwitch').onchange = (e) => {
       state.org = e.target.value;
       try { localStorage.setItem('orgFilter', state.org); } catch {}
       render();
     };
-  } else if (state.profile.role === 'organisation') {
-    const links = [['#/', 'Dashboard'], ['#/o/learners', 'Learners'], ['#/o/requests', 'Pack requests']];
-    bar.innerHTML = `<div class="inner"><a class="title" href="#/">${esc(BRAND.name)} · Organisation</a>
-      <span class="small">${esc(state.profile.full_name || '')}</span>
-      <button class="btn small" id="logout">Sign out</button>
-      <nav>${links.map(([href, l]) => `<a href="${href}" class="${(href === '#/' ? h === '#/' : h.startsWith(href)) ? 'active' : ''}">${l}</a>`).join('')}</nav></div>`;
   } else {
     const guest = state.user?.is_anonymous;
     bar.innerHTML = `<div class="inner"><a class="title" href="#/">${esc(BRAND.name)}</a>
-      <span class="small">${esc(state.profile.full_name || '')}</span>
-      <button class="btn small" id="logout">${guest ? 'End demo' : 'Sign out'}</button></div>
+      <span class="who">${who}</span>
+      <button class="btn small ghost" id="logout">${guest ? 'End demo' : 'Sign out'}</button></div>
       ${guest ? '<div class="guestbar">Demo mode: explore freely. Nothing you do here is real or kept.</div>' : ''}`;
   }
   $('#logout').onclick = async () => { const wasGuest = state.user?.is_anonymous; await sb.auth.signOut(); state.user = null; state.profile = null; go(wasGuest ? '#/' : '#/login'); };
