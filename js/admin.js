@@ -663,7 +663,11 @@ async function workbookEditor(id) {
       }
     }
     await saveOrgLinks('workbook_organisations', 'workbook_id', wid, readOrgPicker());
-    if (asNew) toast('New version saved. The old version is archived. Swap the new one into your packages.');
+    if (asNew) { // move packages and invite codes that used the old version onto the new one (existing enrolments stay on the old version)
+      const pk = must(await sb.from('package_workbooks').update({ workbook_id: wid }).eq('workbook_id', id).select('package_id'));
+      const iv = must(await sb.from('invite_workbooks').update({ workbook_id: wid }).eq('workbook_id', id).select('invite_id'));
+      toast(`New version saved. Old version archived. ${pk.length} package(s) and ${iv.length} invite code(s) moved to the new version.`);
+    }
     else toast('Workbook saved');
     go(`#/a/workbook/${wid}`);
   };
